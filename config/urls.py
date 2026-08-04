@@ -1,0 +1,14 @@
+from django.http import JsonResponse
+from django.urls import include, path
+
+
+def health(_request):
+    return JsonResponse({"status": "ok"})
+
+
+urlpatterns = [
+    path("api/v1/health", health),
+    path("api/v1/", include("accounts.urls")),
+    path("api/v1/", include("verifications.urls")),
+    path("api/v1/", include("listings.urls")),
+]
