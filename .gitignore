@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtualenv
+.venv/
+venv/
+
+# Secrets / local env — commit .env.example, never .env
+.env
+
+# OS
+.DS_Store
