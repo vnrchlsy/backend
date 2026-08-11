@@ -1,9 +1,23 @@
+import re
+
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken as SimpleRefreshToken
 
 from accounts.models import Account, AccountType
+
+# Canonical signup/reset password rule (dev/onboarding-validation.md §signup): min 8 chars,
+# at least one number. This is the ONLY enforcement — the AUTH_PASSWORD_VALIDATORS in settings
+# are never invoked, because DRF serializers don't call Django's validate_password. One error
+# string, matching the screen copy, so client and server say the same thing.
+PASSWORD_ERROR = "At least 8 characters, including a number."
+
+
+def validate_password_strength(value):
+    if len(value) < 8 or not re.search(r"\d", value):
+        raise serializers.ValidationError(PASSWORD_ERROR)
+    return value
 
 
 class SignupSerializer(serializers.Serializer):
@@ -12,7 +26,11 @@ class SignupSerializer(serializers.Serializer):
     account_type = serializers.ChoiceField(choices=[("personal", "personal"), ("shelter", "shelter")])
     display_name = serializers.CharField(max_length=100)
     email = serializers.EmailField()
-    password = serializers.CharField(min_length=8, write_only=True)
+    password = serializers.CharField(write_only=True, validators=[validate_password_strength])
+    # The terms version the client actually displayed. Optional so an older build still
+    # signs up (the server falls back to settings.TERMS_VERSION) — but when the client
+    # sends it, we record what the user was really shown rather than what we assume.
+    consent_version = serializers.CharField(max_length=20, required=False, allow_blank=True)
 
     def validate_email(self, value):
         if Account.objects.filter(email=value).exists():
@@ -37,7 +55,16 @@ def me_repr(account):
     rel = getattr(account, "capabilities", None)
     caps = [{"capability": c.capability, "status": c.status} for c in rel.all()] if rel else []
     s = account.settings
-    return {**account_repr(account), "capabilities": caps, "shelter": None,
+    # Local import: shelter depends on accounts, so importing it at module load would
+    # risk an app-registry cycle. `shelter` is null for a personal account (the client
+    # picks the owner shell); a shelter account carries its tier + derived status.
+    from shelter.models import ShelterProfile
+    profile = ShelterProfile.objects.filter(account=account).first()
+    shelter = None
+    if profile is not None:
+        vr = account.verifications.filter(type="shelter_org").order_by("-submitted_at").first()
+        shelter = {"tier": profile.tier, "verification_status": vr.status if vr else None}
+    return {**account_repr(account), "capabilities": caps, "shelter": shelter,
             "settings": {"marketing_emails": s.marketing_emails,
                          "approximate_location": s.approximate_location,
                          "masked_contact": s.masked_contact, "push_enabled": s.push_enabled}}
@@ -67,7 +94,7 @@ class EmailSerializer(serializers.Serializer):
 class PasswordResetSerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField()
-    new_password = serializers.CharField(min_length=8)
+    new_password = serializers.CharField(validators=[validate_password_strength])
 
 
 class AccountTokenRefreshSerializer(TokenRefreshSerializer):

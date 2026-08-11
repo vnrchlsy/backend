@@ -70,3 +70,21 @@ def test_social_admin_account_type_is_ignored(client, fake_verify):
     assert res.status_code == 200
     acc = Account.objects.get(email="wannabe-admin@example.com")
     assert acc.account_type == "personal"
+
+
+@pytest.mark.django_db
+def test_unwired_provider_returns_clean_503_not_500(client):
+    """The verification seam is deliberately unimplemented (blocked on S0-05/S0-06). It must
+    fail as a typed 503 the client can explain, never as an opaque 500."""
+    res = client.post("/api/v1/auth/social/google", {"id_token": "x"},
+                      content_type="application/json")
+    assert res.status_code == 503
+    assert res.json()["error"]["code"] == "social_not_configured"
+
+
+@pytest.mark.django_db
+def test_unsupported_provider_is_rejected(client):
+    res = client.post("/api/v1/auth/social/tiktok", {"id_token": "x"},
+                      content_type="application/json")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "unsupported_provider"

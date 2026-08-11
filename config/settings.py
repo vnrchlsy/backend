@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "accounts",
     "verifications",
     "listings",
+    "shelter",
 ]
 
 MIDDLEWARE = [
@@ -78,3 +79,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "static/"
 OTP_TTL_MINUTES = 5
 OTP_MAX_ATTEMPTS = 5
+# Version of the Terms/Privacy text a signup consents to (RA 10173 — recorded on
+# account.terms_consent_version). Bump whenever the user-facing terms change, so an
+# older consent is distinguishable from consent to the current text.
+TERMS_VERSION = "2026-08-01"

@@ -34,7 +34,8 @@ class SignupView(APIView):
         try:
             account = Account.objects.create_account(
                 account_type=data["account_type"], email=data["email"],
-                password=data["password"], display_name=data["display_name"])
+                password=data["password"], display_name=data["display_name"],
+                terms_consent_version=data.get("consent_version") or None)
         except IntegrityError:
             return Response(
                 {"error": {"code": "email_taken", "message": "Email already in use",
@@ -221,13 +222,62 @@ class MeLocationView(APIView):
         return Response({"city": addr.city, "barangay": addr.barangay or None})
 
 
+class MePhoneView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        phone = (request.data.get("phone") or "").strip()
+        if not phone:
+            return Response({"error": {"code": "invalid", "message": "phone required",
+                                       "field": "phone"}}, status=400)
+        acc = request.user
+        # Store the candidate now (phone is nullable with a separate phone_verified_at);
+        # verification only sets phone_verified_at. A number already verified/held by
+        # another account collides on the UNIQUE column -> generic phone_taken.
+        if Account.objects.filter(phone=phone).exclude(pk=acc.pk).exists():
+            return Response({"error": {"code": "phone_taken",
+                                       "message": "That number can't be used"}}, status=409)
+        acc.phone = phone
+        acc.phone_verified_at = None
+        try:
+            acc.save(update_fields=["phone", "phone_verified_at"])
+        except IntegrityError:
+            return Response({"error": {"code": "phone_taken",
+                                       "message": "That number can't be used"}}, status=409)
+        issue_code(acc, channel="sms", purpose="phone")
+        return Response({}, status=202)
+
+
+class MePhoneVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        acc = request.user
+        try:
+            verify_code(acc, purpose="phone", code=request.data.get("code", ""))
+        except (CodeInvalid, CodeExpired, CodeLocked) as exc:
+            return _otp_error_response(exc)
+        acc.phone_verified_at = timezone.now()
+        acc.save(update_fields=["phone_verified_at"])
+        return Response({"phone_verified_at": acc.phone_verified_at})
+
+
 class SocialAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, provider):
         from accounts.models import AccountIdentity
         from accounts import social
-        claims = social.verify_token(provider, request.data.get("id_token"))
+        if provider not in ("google", "apple"):
+            return Response({"error": {"code": "unsupported_provider",
+                                       "message": "That sign-in provider isn't supported"}}, status=400)
+        try:
+            claims = social.verify_token(provider, request.data.get("id_token"))
+        except social.SocialNotConfigured:
+            # Not wired yet (see accounts/social.py). A clean, typed 503 beats a 500 —
+            # the client can show "not available yet" instead of "something went wrong".
+            return Response({"error": {"code": "social_not_configured",
+                                       "message": "Social sign-in isn't available yet"}}, status=503)
         email = claims.get("email")
         if not email:
             return Response({"error": {"code": "email_required",

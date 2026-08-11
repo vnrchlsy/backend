@@ -23,6 +23,18 @@ def test_me_returns_profile_with_capabilities_and_settings(client):
 
 
 @pytest.mark.django_db
+def test_me_shelter_block_reflects_tier_and_derived_status(client):
+    acc = AccountFactory(account_type="shelter", email_verified_at=timezone.now())
+    from shelter.models import ShelterProfile
+    from verifications.models import VerificationRequest
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="registered_ngo")
+    VerificationRequest.objects.create(account=acc, type="shelter_org", status="pending")
+    body = client.get("/api/v1/me", **_auth(client, acc)).json()
+    assert body["shelter"] == {"tier": "registered_ngo", "verification_status": "pending"}
+
+
+@pytest.mark.django_db
 def test_patch_me_updates_display_name(client):
     acc = AccountFactory(email_verified_at=timezone.now())
     res = client.patch("/api/v1/me", {"display_name": "New Name"},

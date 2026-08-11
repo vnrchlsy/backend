@@ -68,6 +68,17 @@ class VerificationRequest(models.Model):
 
     class Meta:
         db_table = "verification_request"
+        # The public-visibility predicate (listings/visibility.py) asks, per poster,
+        # "does an approved shelter_org request exist?" — account_id + type + status.
+        # The existing indexes don't serve it: idx_verification_account is the join key
+        # alone, and idx_verification_one_open is PARTIAL on status IN (pending,
+        # needs_info) — it deliberately excludes 'approved', so the hot read misses it.
+        # Kept an index rather than denormalizing a verification_status column onto
+        # shelter_profile: "verified is always derived, never a stored boolean" is a
+        # load-bearing rule (Sprint 1 §conventions, Sprint 2 rule 1, Decision B).
+        # See dev/verification-and-admin.md for the re-open trigger.
+        indexes = [models.Index(fields=["account", "type", "status"],
+                                name="idx_verification_acct_type_st")]
 
 
 class VerificationDocument(models.Model):

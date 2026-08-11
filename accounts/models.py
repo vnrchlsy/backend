@@ -27,12 +27,22 @@ class AccountStatus(models.TextChoices):
 
 
 class AccountManager(models.Manager):
-    def create_account(self, *, account_type, email, display_name, password=None, **extra):
+    def create_account(self, *, account_type, email, display_name, password=None,
+                       terms_consent_version=None, **extra):
+        # RA 10173: the controller must be able to DEMONSTRATE consent, so creating an
+        # account always stamps it — signing up *is* the consent the screen describes.
+        # Stamped here rather than in the view so every creation path (email signup,
+        # social signup) records it and none can quietly forget.
+        from django.conf import settings as dj_settings
+        from django.utils import timezone
         with transaction.atomic():
             account = self.model(account_type=account_type, email=email,
                                  display_name=display_name, **extra)
             if password:
                 account.set_password(password)
+            account.terms_consent_at = timezone.now()
+            account.terms_consent_version = (
+                terms_consent_version or getattr(dj_settings, "TERMS_VERSION", ""))
             account.save(using=self._db)
             AccountSettings.objects.create(account=account)
         return account
@@ -48,6 +58,12 @@ class Account(models.Model):
     password_hash = models.TextField(blank=True)          # NULL/"" for social-only
     display_name = models.CharField(max_length=100)
     photo_url = models.TextField(blank=True)
+    # Signup Terms/Privacy consent (RA 10173). Distinct from
+    # verification_request.consent_at/.consent_version, which cover the separate
+    # purpose-specific consent to collect identity DOCUMENTS (§12.6) — never merge them.
+    # Nullable: accounts predating this column have no value and must not be backfilled.
+    terms_consent_at = models.DateTimeField(null=True, blank=True)
+    terms_consent_version = models.CharField(max_length=20, blank=True)
     # date_of_birth intentionally omitted (RA 10173 minimization — see plan Global Constraints)
     two_factor_enabled = models.BooleanField(default=False)
     sessions_revoked_at = models.DateTimeField(null=True, blank=True)  # logout-all / password reset set this; tokens with iat before it are rejected

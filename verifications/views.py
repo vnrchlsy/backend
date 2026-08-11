@@ -8,6 +8,37 @@ from verifications.models import (AccountCapability, VerificationDocument,
                                   VerificationRequest)
 from verifications.serializers import VerificationSerializer
 
+# The tier-1 base document set (§3.5). A community rescue submits exactly this;
+# a registered NGO must include it too, plus the NGO papers below.
+TIER1_BASE = ["gov_id", "proof_billing"]
+MIN_RESCUE_PHOTOS = 3
+
+
+def _shelter_doc_error(tier, docs, bai_pending):
+    """Server-derived doc check (never trust the client's list). Returns an
+    (http_status, body) tuple to reject, or None if the set satisfies the tier."""
+    types = [d["doc_type"] for d in docs]
+    base_ok = all(t in types for t in TIER1_BASE) and types.count("rescue_photos") >= MIN_RESCUE_PHOTOS
+    if tier == "registered_ngo":
+        # Rule 5: tier-1 base must be present before any tier-2 evidence is accepted.
+        if not base_ok:
+            return 409, {"error": {"code": "tier1_incomplete",
+                                   "message": "Submit the base (tier-1) documents first"}}
+        missing = "sec_dti" not in types or (not bai_pending and "bai_cert" not in types)
+        if missing:
+            required = ["gov_id", "proof_billing", "rescue_photos", "sec_dti"]
+            if not bai_pending:
+                required.append("bai_cert")
+            return 422, {"error": {"code": "missing_docs", "message": "Required documents missing",
+                                   "details": {"required": required, "min_photos": MIN_RESCUE_PHOTOS}}}
+        return None
+    # community_rescue (tier 1)
+    if not base_ok:
+        return 422, {"error": {"code": "missing_docs", "message": "Required documents missing",
+                               "details": {"required": ["gov_id", "proof_billing", "rescue_photos"],
+                                           "min_photos": MIN_RESCUE_PHOTOS}}}
+    return None
+
 
 class PresignView(APIView):
     permission_classes = [IsAuthenticated]
@@ -32,6 +63,21 @@ class VerificationCreateView(APIView):
             return Response({"error": {"code": "consent_missing",
                                        "message": "Consent is required to submit documents"}},
                             status=422)
+        if data["type"] == "shelter_org":
+            if request.user.account_type != "shelter":
+                return Response({"error": {"code": "not_shelter",
+                                           "message": "Only shelter accounts submit org verification"}},
+                                status=403)
+            from shelter.models import ShelterProfile
+            profile = ShelterProfile.objects.filter(account=request.user).first()
+            if profile is None:
+                return Response({"error": {"code": "no_profile",
+                                           "message": "Set up the shelter profile first"}}, status=409)
+            # Required set is derived from the stored tier, server-side (§3.5) — the
+            # client's document list is never trusted to declare which tier it is.
+            err = _shelter_doc_error(profile.tier, data["documents"], data.get("bai_pending", False))
+            if err is not None:
+                return Response(err[1], status=err[0])
         with transaction.atomic():
             vr = VerificationRequest.objects.create(
                 account=request.user, type=data["type"], status="pending",

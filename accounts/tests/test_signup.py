@@ -61,3 +61,33 @@ def test_signup_shelter_account_type_still_allowed(client):
     assert res.status_code == 201
     acc = Account.objects.get(email="shelter@example.com")
     assert acc.account_type == "shelter"
+
+
+@pytest.mark.django_db
+def test_signup_rejects_password_without_a_number(client):
+    """Canonical rule (onboarding-validation §signup): min 8 chars, at least one number.
+    'password' is 8 chars but has no digit — must be rejected, not accepted."""
+    res = client.post("/api/v1/auth/signup", {
+        "account_type": "personal", "display_name": "Ana",
+        "email": "nonum@example.com", "password": "password",
+    }, content_type="application/json")
+    assert res.status_code == 400
+    assert not Account.objects.filter(email="nonum@example.com").exists()
+
+
+@pytest.mark.django_db
+def test_signup_rejects_short_password(client):
+    res = client.post("/api/v1/auth/signup", {
+        "account_type": "personal", "display_name": "Ana",
+        "email": "short@example.com", "password": "ab1",
+    }, content_type="application/json")
+    assert res.status_code == 400
+
+
+@pytest.mark.django_db
+def test_signup_accepts_password_with_a_number(client):
+    res = client.post("/api/v1/auth/signup", {
+        "account_type": "personal", "display_name": "Ana",
+        "email": "ok@example.com", "password": "s3cretpass",
+    }, content_type="application/json")
+    assert res.status_code == 201
