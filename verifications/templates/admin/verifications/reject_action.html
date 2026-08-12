@@ -1,0 +1,18 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<form method="post">{% csrf_token %}
+  <p>Rejecting {{ queryset.count }} verification request(s). The reason below is shown to
+     the applicant, so write it for them — name the file and what's wrong with it.</p>
+  <p>
+    <label for="id_notes">Reason (required):</label><br>
+    <textarea id="id_notes" name="notes" rows="4" cols="70"
+              placeholder="e.g. Proof of billing is too dark to read the address — please re-upload."></textarea>
+  </p>
+  {% for obj in queryset %}
+    <input type="hidden" name="_selected_action" value="{{ obj.pk }}">
+  {% endfor %}
+  <input type="hidden" name="action" value="reject_selected">
+  <input type="submit" name="apply" value="Reject with this reason" class="default">
+  <a href="." class="button cancel-link">Cancel</a>
+</form>
+{% endblock %}

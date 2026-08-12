@@ -90,6 +90,15 @@ class VerificationDocument(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, default="pending")
     review_note = models.TextField(blank=True)
+    # Per-document review (US-R6). These columns exist in the §7 DDL but were missing from
+    # this model until Sprint 2 wired the reviewer — see kupkop_mvp_schema.sql. reviewed_by/
+    # _at stamp who bounced a file and when; superseded_by links a rejected file to the
+    # replacement inserted on resubmit (US-V3), keeping the rejected row for the audit trail.
+    reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name="+")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True,
+                                      related_name="+")
 
     class Meta:
         db_table = "verification_document"

@@ -91,6 +91,25 @@ class Account(models.Model):
         return True
 
 
+class StaffProfile(models.Model):
+    """Option A staff bridge (US-R1). A Kupkop reviewer signs into `/admin` as a Django
+    `contrib.auth.User` (web session), but a review decision is attributed to an
+    `Account(account_type='admin')` via `verification_request.reviewed_by`. This 1:1 link
+    is the join between the two identities, so `reviewed_by` can be stamped from the admin
+    request's `User`. It lives only in Django — like `auth_user` and the JWT blacklist
+    tables — and is deliberately NOT a domain table in `kupkop_mvp_schema.sql`."""
+
+    id = models.BigAutoField(primary_key=True)
+    user = models.OneToOneField("auth.User", on_delete=models.CASCADE,
+                                related_name="staff_profile")
+    account = models.OneToOneField(Account, on_delete=models.CASCADE,
+                                   related_name="staff_profile")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "staff_profile"
+
+
 class AccountSettings(models.Model):
     settings_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     account = models.OneToOneField(Account, on_delete=models.CASCADE, related_name="settings")

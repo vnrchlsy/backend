@@ -6,38 +6,93 @@ from rest_framework.views import APIView
 
 from verifications.models import (AccountCapability, VerificationDocument,
                                   VerificationRequest)
+from verifications.rules import (MIN_RESCUE_PHOTOS, base_complete, missing_docs,
+                                 required_doc_types)
 from verifications.serializers import VerificationSerializer
-
-# The tier-1 base document set (§3.5). A community rescue submits exactly this;
-# a registered NGO must include it too, plus the NGO papers below.
-TIER1_BASE = ["gov_id", "proof_billing"]
-MIN_RESCUE_PHOTOS = 3
 
 
 def _shelter_doc_error(tier, docs, bai_pending):
     """Server-derived doc check (never trust the client's list). Returns an
-    (http_status, body) tuple to reject, or None if the set satisfies the tier."""
+    (http_status, body) tuple to reject, or None if the set satisfies the tier. The
+    tier->doc-set rule itself lives in verifications/rules.py, shared with the reviewer's
+    missing-docs line (US-R4) so the two can't drift."""
     types = [d["doc_type"] for d in docs]
-    base_ok = all(t in types for t in TIER1_BASE) and types.count("rescue_photos") >= MIN_RESCUE_PHOTOS
-    if tier == "registered_ngo":
-        # Rule 5: tier-1 base must be present before any tier-2 evidence is accepted.
-        if not base_ok:
+    if not base_complete(types):
+        # Rule 5: the tier-1 base must be present before any tier-2 evidence is accepted.
+        if tier == "registered_ngo":
             return 409, {"error": {"code": "tier1_incomplete",
                                    "message": "Submit the base (tier-1) documents first"}}
-        missing = "sec_dti" not in types or (not bai_pending and "bai_cert" not in types)
-        if missing:
-            required = ["gov_id", "proof_billing", "rescue_photos", "sec_dti"]
-            if not bai_pending:
-                required.append("bai_cert")
-            return 422, {"error": {"code": "missing_docs", "message": "Required documents missing",
-                                   "details": {"required": required, "min_photos": MIN_RESCUE_PHOTOS}}}
-        return None
-    # community_rescue (tier 1)
-    if not base_ok:
         return 422, {"error": {"code": "missing_docs", "message": "Required documents missing",
                                "details": {"required": ["gov_id", "proof_billing", "rescue_photos"],
                                            "min_photos": MIN_RESCUE_PHOTOS}}}
+    if tier == "registered_ngo" and missing_docs(tier, types, bai_pending):
+        required = [t for t in required_doc_types(tier)
+                    if not (t == "bai_cert" and bai_pending)]
+        return 422, {"error": {"code": "missing_docs", "message": "Required documents missing",
+                               "details": {"required": required, "min_photos": MIN_RESCUE_PHOTOS}}}
     return None
+
+
+def _document_repr(d):
+    return {"document_id": str(d.document_id), "doc_type": d.doc_type,
+            "status": d.status, "review_note": d.review_note or None,
+            "superseded_by": str(d.superseded_by_id) if d.superseded_by_id else None}
+
+
+def _verification_repr(vr):
+    return {"verification_id": str(vr.verification_id), "type": vr.type,
+            "status": vr.status, "notes": vr.notes or None,
+            "submitted_at": vr.submitted_at.isoformat(),
+            "reviewed_at": vr.reviewed_at.isoformat() if vr.reviewed_at else None,
+            "documents": [_document_repr(d) for d in vr.documents.order_by("uploaded_at")]}
+
+
+class MeVerificationsView(APIView):
+    """US-V2 · the applicant's document tracker — their own requests and every file's
+    per-file state, so they can see exactly what to fix. Read-only."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = request.user.verifications.order_by("-submitted_at")
+        return Response({"verifications": [_verification_repr(vr) for vr in qs]})
+
+
+class ResubmitDocumentView(APIView):
+    """US-V3 · replace a rejected file. The old row is SUPERSEDED, never deleted or
+    mutated (audit trail), the replacement is inserted pending, and the request returns to
+    the queue. Only the owner, and only a genuinely rejected file — so this can't become a
+    way to swap an approved ID after the fact."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, verification_id):
+        vr = VerificationRequest.objects.filter(pk=verification_id).first()
+        if vr is None:
+            return Response({"error": {"code": "not_found",
+                                       "message": "No such verification request"}}, status=404)
+        if vr.account_id != request.user.account_id:
+            return Response({"error": {"code": "forbidden",
+                                       "message": "Not your verification request"}}, status=403)
+        old = VerificationDocument.objects.filter(
+            verification=vr, document_id=request.data.get("replaces")).first()
+        if old is None:
+            return Response({"error": {"code": "not_found",
+                                       "message": "No such document on this request"}}, status=404)
+        if old.status != "rejected":
+            return Response({"error": {"code": "not_replaceable",
+                                       "message": "Only a rejected file can be replaced"}}, status=409)
+        file_url = (request.data.get("file_url") or "").strip()
+        if not file_url:
+            return Response({"error": {"code": "invalid", "message": "file_url is required"}},
+                            status=422)
+        with transaction.atomic():
+            new = VerificationDocument.objects.create(
+                verification=vr, doc_type=request.data.get("doc_type") or old.doc_type,
+                file_url=file_url, status="pending")
+            old.superseded_by = new
+            old.save(update_fields=["superseded_by"])
+            vr.status = "pending"
+            vr.save(update_fields=["status"])
+        return Response({"document_id": str(new.document_id)}, status=201)
 
 
 class PresignView(APIView):
