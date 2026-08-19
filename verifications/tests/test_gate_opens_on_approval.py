@@ -58,7 +58,9 @@ def test_shelter_dashboard_gates_flip_from_false_to_true_on_approval(client):
     approve_request(vr, reviewer)
 
     after = client.get("/api/v1/shelter/dashboard", **_hdr(shelter)).json()["gates"]
-    assert after == {"can_publish": True, "donations_enabled": True}
+    # US-X3 · publishing opens on approval, but donations need a SECOND key (a reviewer-verified
+    # QR), so donations_enabled stays False here — the two-key gate is proved in test_donation_gate.
+    assert after == {"can_publish": True, "donations_enabled": False}
 
 
 @pytest.mark.django_db

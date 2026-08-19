@@ -64,11 +64,14 @@ class ShelterDashboardView(APIView):
         docs = [{"doc_type": d.doc_type, "status": d.status}
                 for d in vr.documents.all()] if vr else []
         draft_listings = request.user.listings.count()   # unverified: everything they post is a draft
+        # US-X3 · donations are a TWO-key gate: org approved AND a reviewer-verified QR on file.
+        # Still fully derived (§3.5) — no stored donations flag; the QR's `verified` is the check.
+        donations_enabled = approved and request.user.donation_qrs.filter(verified=True).exists()
         return Response({
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
             "counts": {"draft_listings": draft_listings, "adopted": 0, "donations": 0},
-            "gates": {"can_publish": approved, "donations_enabled": approved},
+            "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
         })
 
 
