@@ -74,3 +74,51 @@ class StrayReportPhoto(models.Model):
 
     class Meta:
         db_table = "stray_report_photo"
+
+
+class RescueCase(models.Model):
+    """US-S6 scaffolding · an exclusive, binding claim on a stray report (kupkop_mvp_schema.sql
+    `rescue_case`). Sprint 3 owns the claim flow that writes these; this sprint only stands the
+    table up. `report` is UNIQUE among ACTIVE claims (partial unique, expired_at IS NULL), not
+    unique forever: a stalled claim can expire (Sprint 3) and the report reverts to `reported` to
+    be re-claimed, while the expired row survives as the accountability signal — so exclusivity is
+    'one live claim', matching the DDL's `idx_rescue_case_active`, not the pre-expiry plain UNIQUE."""
+
+    case_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report = models.ForeignKey(StrayReport, on_delete=models.CASCADE, related_name="cases")
+    claimed_by_account = models.ForeignKey(Account, on_delete=models.PROTECT,
+                                           related_name="claimed_cases")
+    claimed_at = models.DateTimeField(auto_now_add=True)
+    outcome_notes = models.TextField(blank=True)
+    outcome_photo_url = models.TextField(blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    # Set when a stalled claim auto-expires (Sprint 3); the report reverts to reported and can be
+    # re-claimed while this row is kept. NULL = active claim.
+    expired_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "rescue_case"
+        constraints = [
+            models.UniqueConstraint(fields=["report"],
+                                    condition=models.Q(expired_at__isnull=True),
+                                    name="idx_rescue_case_active"),
+        ]
+
+
+class CaseStatusHistory(models.Model):
+    """US-S6 · an append-only audit of every stray-report status change (kupkop_mvp_schema.sql
+    `case_status_history`). Written only via `set_report_status()` so a status can never move
+    unlogged — Sprint 3 builds the claim/resolve transitions on top of that single writer."""
+
+    history_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report = models.ForeignKey(StrayReport, on_delete=models.CASCADE, related_name="status_history")
+    status = models.CharField(max_length=10, choices=StrayStatus.choices)
+    # SET_NULL, not CASCADE: an account leaving must not erase the audit trail of what it changed.
+    changed_by_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True,
+                                           blank=True, related_name="+")
+    changed_at = models.DateTimeField(auto_now_add=True)
+    note = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        db_table = "case_status_history"
+        indexes = [models.Index(fields=["report", "-changed_at"], name="idx_case_history_report")]
