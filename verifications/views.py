@@ -147,3 +147,67 @@ class VerificationCreateView(APIView):
                     account=request.user, capability=cap, defaults={"status": "pending"})
         return Response({"verification_id": str(vr.verification_id), "status": "pending"},
                         status=201)
+
+
+class ShelterUpgradeView(APIView):
+    """US-X4 · upgrade a tier-1 (community_rescue) shelter to registered_ngo.
+
+    Enforces the tier1 -> tier2 order server-side: an APPROVED tier-1 shelter_org request must
+    already exist, and its approved base evidence counts as on-file, so it is NOT re-uploaded —
+    the applicant sends only the NGO delta (sec_dti, plus bai_cert unless bai_pending). This
+    creates a fresh pending shelter_org request carrying the NGO papers; approving it in the
+    normal reviewer queue promotes the tier (see review.approve_request). The tier is never
+    moved here — only on approval — so the badge can't precede the decision.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from shelter.models import ShelterProfile, ShelterTier
+        if request.user.account_type != "shelter":
+            return Response({"error": {"code": "not_shelter",
+                                       "message": "Only shelter accounts can upgrade"}}, status=403)
+        profile = ShelterProfile.objects.filter(account=request.user).first()
+        if profile is None:
+            return Response({"error": {"code": "no_profile",
+                                       "message": "Set up the shelter profile first"}}, status=409)
+        if profile.tier == ShelterTier.REGISTERED_NGO:
+            return Response({"error": {"code": "already_ngo",
+                                       "message": "This organisation is already a registered NGO"}},
+                            status=409)
+        tier1 = (request.user.verifications.filter(type="shelter_org", status="approved")
+                 .order_by("-submitted_at").first())
+        if tier1 is None:
+            return Response({"error": {"code": "tier1_incomplete",
+                                       "message": "Complete tier-1 verification before upgrading"}},
+                            status=409)
+
+        s = VerificationSerializer(data={**request.data, "type": "shelter_org"})
+        s.is_valid(raise_exception=True)
+        data = s.validated_data
+        if not data.get("consent_version"):
+            return Response({"error": {"code": "consent_missing",
+                                       "message": "Consent is required to submit documents"}},
+                            status=422)
+
+        # The tier-1 base already on file counts — union the approved tier-1 request's doc types
+        # (the whole request was accepted; per-file status is a separate R6 concern) with the
+        # freshly-submitted NGO papers, then apply the SAME tier-2 rule (rules.missing_docs), so
+        # the shelter never re-uploads gov_id / proof_billing / rescue_photos.
+        on_file = [d.doc_type for d in tier1.documents.all()]
+        present = on_file + [d["doc_type"] for d in data["documents"]]
+        missing = missing_docs("registered_ngo", present, data.get("bai_pending", False))
+        if missing:
+            return Response({"error": {"code": "missing_docs",
+                                       "message": "Missing required NGO documents",
+                                       "required": missing}}, status=422)
+
+        with transaction.atomic():
+            vr = VerificationRequest.objects.create(
+                account=request.user, type="shelter_org", status="pending",
+                social_proof_url=data.get("social_proof_url", ""),
+                consent_at=timezone.now(), consent_version=data["consent_version"])
+            for doc in data["documents"]:
+                VerificationDocument.objects.create(verification=vr, doc_type=doc["doc_type"],
+                                                    file_url=doc["file_url"], status="pending")
+        return Response({"verification_id": str(vr.verification_id), "status": "pending"},
+                        status=201)

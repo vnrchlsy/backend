@@ -60,7 +60,10 @@ class ShelterDashboardView(APIView):
         vr = (request.user.verifications.filter(type="shelter_org")
               .order_by("-submitted_at").first())
         submitted = vr is not None
-        approved = bool(vr and vr.status == "approved")
+        # `approved` = ANY approved shelter_org request (US-X4), matching public_poster_q() so the
+        # dashboard and listing visibility never disagree. `vr` (latest) still drives the status/docs
+        # shown, so an in-flight tier-2 upgrade reads as pending WITHOUT revoking the tier-1 gates.
+        approved = request.user.verifications.filter(type="shelter_org", status="approved").exists()
         docs = [{"doc_type": d.doc_type, "status": d.status}
                 for d in vr.documents.all()] if vr else []
         draft_listings = request.user.listings.count()   # unverified: everything they post is a draft

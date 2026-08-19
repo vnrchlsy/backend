@@ -41,10 +41,27 @@ def approve_request(vr, reviewer):
         AccountCapability.objects.update_or_create(
             account=vr.account, capability="rescuer",
             defaults={"status": "approved", "granted_at": timezone.now()})
+    if vr.type == VerificationType.SHELTER_ORG:
+        _maybe_upgrade_tier(vr)
     body = ("Your shelter verification was approved." if vr.type == VerificationType.SHELTER_ORG
             else "Your Verified Member application was approved.")
     _notify_decision(vr, "verification_approved", "You're verified", body)
     return vr
+
+
+def _maybe_upgrade_tier(vr):
+    """US-X4 · approving a shelter_org request that carries the NGO papers (`sec_dti`) promotes
+    the org to registered_ngo. The tier moves only on APPROVAL — never at submit — so the
+    Verified Shelter badge can't precede the decision and a tier-1 shelter keeps its tier-1
+    standing while the upgrade is under review. A no-op for an org already at registered_ngo
+    (the initial tier-2 path) or a request with no NGO evidence (a plain tier-1 approval)."""
+    from shelter.models import ShelterProfile, ShelterTier
+    if not vr.documents.filter(doc_type="sec_dti").exists():
+        return
+    profile = ShelterProfile.objects.filter(account=vr.account).first()
+    if profile and profile.tier != ShelterTier.REGISTERED_NGO:
+        profile.tier = ShelterTier.REGISTERED_NGO
+        profile.save(update_fields=["tier"])
 
 
 @transaction.atomic
