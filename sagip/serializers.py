@@ -17,4 +17,9 @@ class ReportCreateSerializer(serializers.Serializer):
     lat = serializers.FloatField(min_value=-90, max_value=90)
     lng = serializers.FloatField(min_value=-180, max_value=180)
     location_text = serializers.CharField(required=False, allow_blank=True, max_length=160)
+    # City is a COARSE, city-level label (never the precise geom, §12.5). The client already
+    # reverse-geocodes for `location_text`, so it passes the city it resolved rather than the
+    # server standing up a geocoder (out of MVP scope). Blank/absent stays NULL — the map falls
+    # back to the queried city, and report-detail simply omits it.
+    city = serializers.CharField(required=False, allow_blank=True, max_length=80)
     photos = PhotoSerializer(many=True, required=False)

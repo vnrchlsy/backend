@@ -30,6 +30,7 @@ class ReportsCreateView(APIView):
                 species=d["species"], condition=d["condition"], notes=d.get("notes", ""),
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
+                city=(d.get("city") or "").strip() or None,   # client-resolved city label, or NULL
                 status="reported", escalation_level=0)
             for photo in d.get("photos", []):
                 StrayReportPhoto.objects.create(report=report, url=photo["file_url"])

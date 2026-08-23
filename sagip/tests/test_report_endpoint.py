@@ -41,6 +41,28 @@ def test_an_authenticated_user_creates_a_report(client):
 
 
 @pytest.mark.django_db
+def test_client_resolved_city_is_stored_on_the_report(client):
+    # US-S1 · the client passes the city it reverse-geocoded; the server stores the coarse label
+    # so report-detail + the map show it (no server-side geocoder).
+    acc = AccountFactory()
+    res = client.post("/api/v1/reports", {**VALID, "city": "Marikina"},
+                      content_type="application/json", **_hdr(acc))
+    assert res.status_code == 201
+    r = StrayReport.objects.get(report_id=res.json()["report_id"])
+    assert r.city == "Marikina"
+
+
+@pytest.mark.django_db
+def test_report_without_a_city_stays_null(client):
+    # No city (or blank) → NULL, so the map falls back to the queried city and detail omits it.
+    acc = AccountFactory()
+    res = client.post("/api/v1/reports", {**VALID, "city": "  "},
+                      content_type="application/json", **_hdr(acc))
+    r = StrayReport.objects.get(report_id=res.json()["report_id"])
+    assert r.city is None
+
+
+@pytest.mark.django_db
 def test_anonymous_report_still_records_the_reporter(client):
     acc = AccountFactory()
     res = client.post("/api/v1/reports", {**VALID, "is_anonymous": True},
