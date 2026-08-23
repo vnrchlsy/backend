@@ -1,16 +1,25 @@
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.contrib.gis.measure import D
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from notifications.service import notify
 from sagip.geo import centroid_for
-from sagip.models import StrayReport, StrayReportPhoto
+from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayReportPhoto, StrayStatus
+from sagip.permissions import IsVerifiedRescuer
 from sagip.serializers import ReportCreateSerializer
+from sagip.status import set_report_status
 
 DEFAULT_RADIUS_KM = 10.0
+
+
+def _already_claimed():
+    return Response({"error": {"code": "already_claimed",
+                               "message": "This report already has an active claim"}},
+                    status=409)
 
 
 class ReportsCreateView(APIView):
@@ -35,6 +44,61 @@ class ReportsCreateView(APIView):
             for photo in d.get("photos", []):
                 StrayReportPhoto.objects.create(report=report, url=photo["file_url"])
         return Response({"report_id": str(report.report_id), "status": "reported"}, status=201)
+
+
+class ReportClaimView(APIView):
+    """US-K1 · claim an unclaimed report — exclusive and binding (decision 11). Only an
+    approved rescuer capability (Verified Member) or an approved shelter_org verification
+    (verified shelter) may claim (IsVerifiedRescuer); an unverified caller gets 403.
+
+    Creating the case, moving the report to `claimed` (via `set_report_status`, so it's
+    logged), matching every open offer on the report, and notifying the reporter + each
+    matched offerer all happen inside one transaction — a claim that partially lands
+    (case created but offers left dangling, or vice versa) is worse than no claim.
+
+    Exclusivity is enforced twice: a `select_for_update` existence check inside the
+    transaction (serializes concurrent requests on the same report and returns a clean
+    409), backed by the partial-unique DB constraint (`idx_rescue_case_active`) as the
+    real safety net — an `IntegrityError` that slips past the check still becomes a 409,
+    never a 500."""
+    permission_classes = [IsVerifiedRescuer]
+
+    def post(self, request, report_id):
+        try:
+            with transaction.atomic():
+                report = (StrayReport.objects.select_for_update()
+                          .filter(pk=report_id).first())
+                if report is None:
+                    return Response({"error": {"code": "not_found",
+                                               "message": "No such report"}}, status=404)
+                if RescueCase.objects.filter(report=report, expired_at__isnull=True).exists():
+                    return _already_claimed()
+
+                case = RescueCase.objects.create(report=report, claimed_by_account=request.user)
+                set_report_status(report, StrayStatus.CLAIMED, request.user)
+
+                offers = ReportOffer.objects.select_for_update().filter(
+                    report=report, status=OfferStatus.OPEN)
+                for offer in offers:
+                    offer.status = OfferStatus.MATCHED
+                    offer.save(update_fields=["status"])
+                    notify(offer.account, "offer_matched",
+                          title="Your offer was matched",
+                          body=f"Someone claimed the {report.get_species_display().lower()} "
+                               f"you offered to help.",
+                          data={"report_id": str(report.pk), "case_id": str(case.pk)})
+
+                # The reporter is always notified — is_anonymous hides them from OTHER
+                # users, never from their own report (rule 6).
+                if report.reporter_account_id:
+                    notify(report.reporter_account, "report_claimed",
+                          title="Your report was claimed",
+                          body=f"{request.user.display_name} is on the way.",
+                          data={"report_id": str(report.pk), "case_id": str(case.pk)})
+        except IntegrityError:
+            return _already_claimed()
+
+        return Response({"case_id": str(case.pk), "status": "claimed"}, status=201)
 
 
 class RescueMapView(APIView):

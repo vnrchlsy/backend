@@ -105,6 +105,49 @@ class RescueCase(models.Model):
         ]
 
 
+class OfferType(models.TextChoices):
+    TRANSPORT = "transport"
+    VET_COSTS = "vet_costs"
+    SUPPLIES = "supplies"
+
+
+class OfferStatus(models.TextChoices):
+    OPEN = "open"
+    MATCHED = "matched"
+    EXPIRED = "expired"
+
+
+class ReportOffer(models.Model):
+    """A non-exclusive commitment on an unclaimed report (decision 12; matches
+    kupkop_mvp_schema.sql `report_offer`). Sprint 3's Track O (US-O1) owns creating these;
+    this model lands here first because Track K (build first) needs it to exist — claiming
+    a report flips every OPEN offer on it to MATCHED (US-K1). `UNIQUE(report, account,
+    offer_type)`: one person may offer transport AND supplies, never the same type twice."""
+
+    offer_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report = models.ForeignKey(StrayReport, on_delete=models.CASCADE, related_name="offers")
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="report_offers")
+    offer_type = models.CharField(max_length=10, choices=OfferType.choices)
+    status = models.CharField(max_length=10, choices=OfferStatus.choices,
+                              default=OfferStatus.OPEN)
+    note = models.CharField(max_length=200, blank=True)
+    # created_at + 48h (decision 14: must exceed the longest claim window, 24h) — set by the
+    # US-O1 create endpoint, not defaulted here (the model has no opinion on the policy number).
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "report_offer"
+        constraints = [
+            models.UniqueConstraint(fields=["report", "account", "offer_type"],
+                                    name="uq_report_offer_type"),
+        ]
+        indexes = [
+            models.Index(fields=["report", "status"], name="idx_report_offer_report"),
+            models.Index(fields=["account", "-created_at"], name="idx_report_offer_account"),
+        ]
+
+
 class CaseStatusHistory(models.Model):
     """US-S6 · an append-only audit of every stray-report status change (kupkop_mvp_schema.sql
     `case_status_history`). Written only via `set_report_status()` so a status can never move
