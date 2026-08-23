@@ -189,3 +189,5 @@ def test_my_offers_lists_only_my_own_newest_first(client):
     body = res.json()["offers"]
     assert [o["offer_id"] for o in body] == [str(newer.pk), str(older.pk)]
     assert body[0]["status"] == "matched" and body[0]["report"]["species"] == "cat"
+    # report_id lets the client link an offer row back to the report it's on
+    assert body[0]["report"]["report_id"] == str(r2.pk)

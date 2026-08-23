@@ -173,8 +173,8 @@ class MyRescuesView(APIView):
               .select_related("report").order_by("-claimed_at"))
         cases = [{
             "case_id": str(c.pk),
-            "report": {"species": c.report.species, "condition": c.report.condition,
-                      "city": c.report.city},
+            "report": {"report_id": str(c.report_id), "species": c.report.species,
+                      "condition": c.report.condition, "city": c.report.city},
             "status": c.report.status,
             "claimed_at": c.claimed_at.isoformat(),
             "expired_at": c.expired_at.isoformat() if c.expired_at else None,
@@ -265,8 +265,8 @@ class MyOffersView(APIView):
               .select_related("report").order_by("-created_at"))
         offers = [{
             "offer_id": str(o.pk),
-            "report": {"species": o.report.species, "condition": o.report.condition,
-                      "city": o.report.city},
+            "report": {"report_id": str(o.report_id), "species": o.report.species,
+                      "condition": o.report.condition, "city": o.report.city},
             "offer_type": o.offer_type,
             "status": o.status,
             "expires_at": o.expires_at.isoformat(),

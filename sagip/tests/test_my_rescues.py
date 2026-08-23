@@ -64,12 +64,14 @@ def test_active_resolved_and_expired_cases_all_come_back(client):
 @pytest.mark.django_db
 def test_the_status_reflects_the_report_not_a_stored_case_field(client):
     me = AccountFactory()
-    case = RescueCase.objects.create(report=_report(status="safe"), claimed_by_account=me)
+    report = _report(status="safe")
+    case = RescueCase.objects.create(report=report, claimed_by_account=me)
 
     res = client.get("/api/v1/me/rescues", **_hdr(me))
     row = res.json()["cases"][0]
     assert row["status"] == "safe"
-    assert row["report"] == {"species": "dog", "condition": "injured", "city": "Marikina"}
+    assert row["report"] == {"report_id": str(report.pk), "species": "dog",
+                             "condition": "injured", "city": "Marikina"}
     assert case.pk  # sanity: the fixture case actually exists
 
 
