@@ -27,6 +27,10 @@ class IsVerifiedMember(IsAuthenticated):
     listing/claim visibility does."""
 
     message = "This action requires a Verified Member badge."
+    # US-A4's contract names this exact code (`403 {code:"member_badge_required"}`) — DRF
+    # reads `permission.code` and threads it into the error body via
+    # common.errors.error_handler, so this is the one line that makes the two agree.
+    code = "member_badge_required"
 
     def has_permission(self, request, view):
         return (super().has_permission(request, view)

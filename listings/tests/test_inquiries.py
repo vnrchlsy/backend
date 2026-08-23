@@ -58,6 +58,7 @@ def test_an_unverified_owner_cannot_inquire(client):
     plain = AccountFactory(phone_verified_at=timezone.now())
     res = _inquire(client, listing, plain)
     assert res.status_code == 403
+    assert res.json()["error"]["code"] == "member_badge_required"  # matches the story's own contract
 
 
 @pytest.mark.django_db
