@@ -7,10 +7,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from listings.permissions import IsVerifiedRescuer
 from notifications.service import notify
 from sagip.geo import centroid_for, coarsen_point
 from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayReportPhoto, StrayStatus
-from sagip.permissions import IsVerifiedRescuer, is_active_claimer
+from sagip.permissions import is_active_claimer
 from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
 from sagip.status import set_report_status
 
