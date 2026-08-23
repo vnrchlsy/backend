@@ -11,10 +11,13 @@ from notifications.service import notify
 from sagip.geo import centroid_for
 from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayReportPhoto, StrayStatus
 from sagip.permissions import IsVerifiedRescuer
-from sagip.serializers import CaseStatusUpdateSerializer, ReportCreateSerializer
+from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
 from sagip.status import set_report_status
 
 DEFAULT_RADIUS_KM = 10.0
+# decision 14: offers must outlive the longest claim window (24h) so a reopened case
+# still has people to re-ask — if either number moves, move both.
+OFFER_WINDOW_HOURS = 48
 
 # US-K2 · a case can only move forward through this order; `resolved` is terminal.
 # `claimed` is included as the baseline so a target's index can be compared against
@@ -179,6 +182,98 @@ class MyRescuesView(APIView):
         return Response({"cases": cases})
 
 
+class ReportOffersView(APIView):
+    """US-O1 · offer help on an unclaimed report — a non-exclusive commitment (decision
+    12). Anyone signed in may offer (no verification gate — that's the point of the
+    ladder's lower rung); allowed only while the report is `reported`, since a claimed or
+    resolved case has nothing left to offer on. **Never moves `stray_report.status`** —
+    an offer answers a different question than a claim does."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, report_id):
+        report = StrayReport.objects.filter(pk=report_id).first()
+        if report is None:
+            return Response({"error": {"code": "not_found", "message": "No such report"}},
+                            status=404)
+        if report.status != StrayStatus.REPORTED:
+            return Response({"error": {"code": "report_not_open",
+                                       "message": "This report is no longer open for offers"}},
+                            status=409)
+
+        s = OfferCreateSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        offer_type = s.validated_data["offer_type"]
+        if ReportOffer.objects.filter(report=report, account=request.user,
+                                      offer_type=offer_type).exists():
+            return Response({"error": {"code": "already_offered",
+                                       "message": "You already offered this"}}, status=409)
+
+        expires_at = timezone.now() + timezone.timedelta(hours=OFFER_WINDOW_HOURS)
+        try:
+            offer = ReportOffer.objects.create(
+                report=report, account=request.user, offer_type=offer_type,
+                status=OfferStatus.OPEN, expires_at=expires_at)
+        except IntegrityError:
+            # Backstop for the UNIQUE(report, account, offer_type) constraint, same
+            # belt-and-suspenders shape as the claim's IntegrityError handling.
+            return Response({"error": {"code": "already_offered",
+                                       "message": "You already offered this"}}, status=409)
+
+        if report.reporter_account_id:
+            notify(report.reporter_account, "offer_received",
+                  title="Someone offered to help",
+                  body=f"{request.user.display_name} can help with "
+                       f"{offer.get_offer_type_display().lower()}.",
+                  data={"report_id": str(report.pk), "offer_id": str(offer.pk)})
+
+        return Response({"offer_id": str(offer.pk), "status": offer.status,
+                         "expires_at": offer.expires_at.isoformat()}, status=201)
+
+
+class ReportOfferWithdrawView(APIView):
+    """US-O2 · withdraw an offer — allowed only while it's still `open`. That
+    reversibility is what earns offers the right to be low-effort (decision 12); once
+    matched or expired there's nothing left to take back. No `withdrawn` status exists
+    in the DDL's `offer_status` enum, so withdrawing deletes the row rather than
+    recording a fourth state."""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, report_id, offer_id):
+        offer = ReportOffer.objects.filter(pk=offer_id, report_id=report_id).first()
+        if offer is None:
+            return Response({"error": {"code": "not_found", "message": "No such offer"}},
+                            status=404)
+        if offer.account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_offer",
+                                       "message": "You can only withdraw your own offer"}},
+                            status=403)
+        if offer.status != OfferStatus.OPEN:
+            return Response({"error": {"code": "not_withdrawable",
+                                       "message": "This offer can no longer be withdrawn"}},
+                            status=409)
+        offer.delete()
+        return Response(status=204)
+
+
+class MyOffersView(APIView):
+    """US-O2 · the caller's own offers, newest first — the client groups them into
+    Open / Matched / Expired."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (ReportOffer.objects.filter(account=request.user)
+              .select_related("report").order_by("-created_at"))
+        offers = [{
+            "offer_id": str(o.pk),
+            "report": {"species": o.report.species, "condition": o.report.condition,
+                      "city": o.report.city},
+            "offer_type": o.offer_type,
+            "status": o.status,
+            "expires_at": o.expires_at.isoformat(),
+        } for o in qs]
+        return Response({"offers": offers})
+
+
 class RescueMapView(APIView):
     """US-S4 · the public rescue map. Anyone (signed in or not) sees strays near a chosen
     city — a PostGIS proximity query ordered by distance from the city centroid, within a
@@ -230,9 +325,12 @@ class MyReportsView(APIView):
 
 
 class ReportDetailView(APIView):
-    """US-S5 · public report detail (the shared-link case). Condition, notes, photos, city,
-    time, status — city-level, no precise geom, and no claim button this sprint (the claim
-    and offers ladder are Sprint 3)."""
+    """US-S5 · public report detail (the shared-link case) + US-O3 · the reporter's
+    waiting view. Base fields (species, condition, notes, photos, city, status) are
+    Public — city-level, no precise geom, ever (§12.5). A reporter-only block
+    (`escalation_level`, `offers_count`, `status_history`) is added ONLY when the
+    authenticated caller IS this report's reporter — one route, two field-authorization
+    tiers, checked by identity, never assumed from the mere presence of a bearer token."""
     permission_classes = [AllowAny]
 
     def get(self, request, report_id):
@@ -240,8 +338,15 @@ class ReportDetailView(APIView):
         if r is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
-        return Response({
+        body = {
             "report_id": str(r.report_id), "species": r.species, "condition": r.condition,
             "status": r.status, "notes": r.notes or None, "city": r.city,
             "reported_at": r.created_at.isoformat(),
-            "photos": [p.url for p in r.photos.order_by("uploaded_at")]})
+            "photos": [p.url for p in r.photos.order_by("uploaded_at")]}
+        if request.user.is_authenticated and request.user.pk == r.reporter_account_id:
+            body["escalation_level"] = r.escalation_level
+            body["offers_count"] = r.offers.count()
+            body["status_history"] = [
+                {"status": h.status, "changed_at": h.changed_at.isoformat()}
+                for h in r.status_history.order_by("changed_at")]
+        return Response(body)

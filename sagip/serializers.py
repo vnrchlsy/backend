@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from sagip.models import Species, StrayCondition, StrayStatus
+from sagip.models import OfferType, Species, StrayCondition, StrayStatus
 
 
 class PhotoSerializer(serializers.Serializer):
@@ -34,3 +34,7 @@ class CaseStatusUpdateSerializer(serializers.Serializer):
     # Only meaningful (and only ever sent) alongside status="resolved" — the outcome screen.
     outcome_notes = serializers.CharField(required=False, allow_blank=True)
     outcome_photo_url = serializers.CharField(required=False, allow_blank=True)
+
+
+class OfferCreateSerializer(serializers.Serializer):
+    offer_type = serializers.ChoiceField(choices=[c.value for c in OfferType])

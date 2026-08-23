@@ -1,4 +1,4 @@
-"""US-S3 (GET /me/reports) and US-S5 (GET /reports/{id})."""
+"""US-S3 (GET /me/reports), US-S5 + US-O3 (GET /reports/{id})."""
 import uuid
 
 import pytest
@@ -6,7 +6,8 @@ from django.contrib.gis.geos import Point
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
-from sagip.models import StrayReport, StrayReportPhoto
+from sagip.models import ReportOffer, StrayReport, StrayReportPhoto
+from sagip.status import set_report_status
 
 
 def _hdr(acc):
@@ -56,3 +57,53 @@ def test_report_detail_is_public_and_city_level(client):
 @pytest.mark.django_db
 def test_report_detail_404_for_unknown_id(client):
     assert client.get(f"/api/v1/reports/{uuid.uuid4()}").status_code == 404
+
+
+# ── US-O3 · the reporter's waiting view ────────────────────────────────────────────
+@pytest.mark.django_db
+def test_an_anonymous_caller_never_sees_the_reporter_only_fields(client):
+    reporter = AccountFactory()
+    r = _report(reporter, city="Pasig", status="reported")
+    body = client.get(f"/api/v1/reports/{r.report_id}").json()
+    assert "escalation_level" not in body
+    assert "offers_count" not in body
+    assert "status_history" not in body
+
+
+@pytest.mark.django_db
+def test_a_signed_in_non_reporter_never_sees_the_reporter_only_fields(client):
+    """One route, two field-authorization tiers — a valid bearer token that isn't the
+    reporter's must not unlock the extra block (the exact leak this endpoint's shared-
+    route shape makes possible if the check is skipped)."""
+    reporter, someone_else = AccountFactory(), AccountFactory()
+    r = _report(reporter, city="Pasig", status="reported")
+    body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(someone_else)).json()
+    assert "escalation_level" not in body
+    assert "offers_count" not in body
+    assert "status_history" not in body
+
+
+@pytest.mark.django_db
+def test_the_reporter_sees_escalation_offers_count_and_status_history(client):
+    reporter = AccountFactory()
+    r = _report(reporter, city="Pasig", status="reported")
+    r.escalation_level = 1
+    r.save(update_fields=["escalation_level"])
+    ReportOffer.objects.create(report=r, account=AccountFactory(), offer_type="transport",
+                               status="open", expires_at=r.created_at)
+    ReportOffer.objects.create(report=r, account=AccountFactory(), offer_type="supplies",
+                               status="open", expires_at=r.created_at)
+    set_report_status(r, "claimed", AccountFactory())
+
+    body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
+    assert body["escalation_level"] == 1
+    assert body["offers_count"] == 2
+    assert [h["status"] for h in body["status_history"]] == ["claimed"]
+
+
+@pytest.mark.django_db
+def test_the_reporter_still_gets_no_precise_geom_in_their_own_view(client):
+    reporter = AccountFactory()
+    r = _report(reporter, city="Pasig", status="reported")
+    body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
+    assert "lat" not in body and "lng" not in body and "geom" not in body
