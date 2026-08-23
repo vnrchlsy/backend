@@ -8,9 +8,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from notifications.service import notify
-from sagip.geo import centroid_for
+from sagip.geo import centroid_for, coarsen_point
 from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayReportPhoto, StrayStatus
-from sagip.permissions import IsVerifiedRescuer
+from sagip.permissions import IsVerifiedRescuer, is_active_claimer
 from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
 from sagip.status import set_report_status
 
@@ -113,7 +113,11 @@ class ReportClaimView(APIView):
         except IntegrityError:
             return _already_claimed()
 
-        return Response({"case_id": str(case.pk), "status": "claimed"}, status=201)
+        # US-SEC1 · the claimer's need for the exact spot is the reason the app's one
+        # GPS exception exists at all — hand it over the moment the claim lands.
+        return Response({"case_id": str(case.pk), "status": "claimed",
+                         "precise_location": {"lat": report.geom.y, "lng": report.geom.x}},
+                        status=201)
 
 
 class CaseStatusView(APIView):
@@ -161,6 +165,41 @@ class CaseStatusView(APIView):
                 case.save(update_fields=["outcome_notes", "outcome_photo_url", "resolved_at"])
 
         return Response({"status": target}, status=200)
+
+
+class CaseDetailView(APIView):
+    """US-SEC1 · a claimer's own case, including the precise spot. Claim-time already
+    hands over `precise_location` once; this is how the claimer gets it again later
+    (re-opening the app, a different device) without it ever being embedded anywhere a
+    non-claimer could read it. Only the active claimer may view — not even the reporter,
+    who already gets it via `GET /reports/{id}`."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, case_id):
+        case = RescueCase.objects.select_related("report").filter(pk=case_id).first()
+        if case is None:
+            return Response({"error": {"code": "not_found", "message": "No such case"}},
+                            status=404)
+        if case.claimed_by_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_case",
+                                       "message": "Only the claimer can view this case"}},
+                            status=403)
+        report = case.report
+        approx_lat, approx_lng = coarsen_point(report.geom.y, report.geom.x)
+        body = {
+            "case_id": str(case.pk),
+            "report": {
+                "report_id": str(report.report_id), "species": report.species,
+                "condition": report.condition, "city": report.city,
+                "approx_location": {"lat": approx_lat, "lng": approx_lng},
+            },
+            "status": report.status,
+            "claimed_at": case.claimed_at.isoformat(),
+            "expired_at": case.expired_at.isoformat() if case.expired_at else None,
+        }
+        if case.expired_at is None:
+            body["report"]["precise_location"] = {"lat": report.geom.y, "lng": report.geom.x}
+        return Response(body)
 
 
 class MyRescuesView(APIView):
@@ -326,11 +365,20 @@ class MyReportsView(APIView):
 
 class ReportDetailView(APIView):
     """US-S5 · public report detail (the shared-link case) + US-O3 · the reporter's
-    waiting view. Base fields (species, condition, notes, photos, city, status) are
-    Public — city-level, no precise geom, ever (§12.5). A reporter-only block
-    (`escalation_level`, `offers_count`, `status_history`) is added ONLY when the
-    authenticated caller IS this report's reporter — one route, two field-authorization
-    tiers, checked by identity, never assumed from the mere presence of a bearer token."""
+    waiting view + US-SEC1 · the precise-location split.
+
+    Field-authorization table for this one route (never assumed from a bearer token's
+    mere presence — every tier below is checked by identity):
+      - Public (anyone, including a guest): report_id, species, condition, status, notes,
+        city, reported_at, photos, `approx_location` (coarsened — see sagip.geo.coarsen_point;
+        deterministic ~500m grid, never the real point).
+      - Reporter only: `escalation_level`, `offers_count`, `status_history` (US-O3).
+      - Reporter OR the report's active claimer only: `precise_location` — the real point.
+        A reporter always gets it (it's their own report); a claimer needs it to actually
+        find the animal, which is the entire reason the app's one GPS exception exists
+        (decision 11). An EXPIRED claim no longer qualifies — see
+        `sagip.permissions.is_active_claimer`.
+    """
     permission_classes = [AllowAny]
 
     def get(self, request, report_id):
@@ -338,15 +386,23 @@ class ReportDetailView(APIView):
         if r is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
+        approx_lat, approx_lng = coarsen_point(r.geom.y, r.geom.x)
         body = {
             "report_id": str(r.report_id), "species": r.species, "condition": r.condition,
             "status": r.status, "notes": r.notes or None, "city": r.city,
             "reported_at": r.created_at.isoformat(),
-            "photos": [p.url for p in r.photos.order_by("uploaded_at")]}
-        if request.user.is_authenticated and request.user.pk == r.reporter_account_id:
+            "photos": [p.url for p in r.photos.order_by("uploaded_at")],
+            "approx_location": {"lat": approx_lat, "lng": approx_lng}}
+
+        is_reporter = request.user.is_authenticated and request.user.pk == r.reporter_account_id
+        if is_reporter:
             body["escalation_level"] = r.escalation_level
             body["offers_count"] = r.offers.count()
             body["status_history"] = [
                 {"status": h.status, "changed_at": h.changed_at.isoformat()}
                 for h in r.status_history.order_by("changed_at")]
+
+        if is_reporter or is_active_claimer(r, request.user):
+            body["precise_location"] = {"lat": r.geom.y, "lng": r.geom.x}
+
         return Response(body)

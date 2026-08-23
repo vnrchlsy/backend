@@ -1,10 +1,15 @@
-"""City centroids for the rescue-map proximity query (US-S4).
+"""City centroids for the rescue-map proximity query (US-S4), and the precise-location
+coarsening rule (US-SEC1).
 
 The map is city-scoped: a viewer chooses a city, and reports are ranked by distance from
 that city's centre. `stray_report.city` (reverse-geocoded) is out of MVP scope, so the
 centroid — not the stored column — is what anchors the query. Metro Manila first, matching
 the launch scope. Coordinates are (lat, lng), approximate city centres.
 """
+import math
+
+EARTH_RADIUS_M = 6371000
+COARSEN_CELL_SIZE_M = 500
 CITY_CENTROIDS = {
     "Marikina": (14.6507, 121.1029),
     "Pasig": (14.5764, 121.0851),
@@ -28,3 +33,27 @@ def centroid_for(city):
         if name.lower() == key:
             return latlng
     return None
+
+
+def coarsen_point(lat, lng, cell_size_m=COARSEN_CELL_SIZE_M):
+    """US-SEC1 · snap (lat, lng) to the centroid of a deterministic ~cell_size_m grid cell.
+
+    Deterministic, not jittered: the same point always coarsens to the same output. That
+    matters here specifically — a per-request random offset would average out over
+    repeated calls, letting an unprivileged caller triangulate the real point just by
+    asking enough times. A fixed grid has no such leak: every call for the same report
+    returns the identical `approx_location`.
+
+    The longitude-per-degree scale depends on latitude (`cos(lat)`); using each point's
+    own latitude keeps the cell size close to `cell_size_m` at Metro Manila's ~14.6°N
+    without needing a shared reference grid — the tiny non-uniformity this introduces
+    between different reports' cells doesn't matter for a privacy coarsening, only for a
+    true geodesic grid.
+    """
+    m_per_deg_lat = math.pi * EARTH_RADIUS_M / 180
+    m_per_deg_lng = m_per_deg_lat * math.cos(math.radians(lat))
+    lat_cell = math.floor(lat * m_per_deg_lat / cell_size_m)
+    lng_cell = math.floor(lng * m_per_deg_lng / cell_size_m)
+    centroid_lat = (lat_cell + 0.5) * cell_size_m / m_per_deg_lat
+    centroid_lng = (lng_cell + 0.5) * cell_size_m / m_per_deg_lng
+    return centroid_lat, centroid_lng
