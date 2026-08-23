@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from sagip.models import Species, StrayCondition
+from sagip.models import OfferType, Species, StrayCondition, StrayStatus
 
 
 class PhotoSerializer(serializers.Serializer):
@@ -23,3 +23,18 @@ class ReportCreateSerializer(serializers.Serializer):
     # back to the queried city, and report-detail simply omits it.
     city = serializers.CharField(required=False, allow_blank=True, max_length=80)
     photos = PhotoSerializer(many=True, required=False)
+
+
+class CaseStatusUpdateSerializer(serializers.Serializer):
+    """US-K2 · advance a claimed case. `claimed`/`reported` are never valid targets here —
+    a case reaches this endpoint already claimed, so the only moves left are forward."""
+    status = serializers.ChoiceField(
+        choices=[StrayStatus.RESCUED, StrayStatus.SAFE, StrayStatus.RESOLVED])
+    note = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    # Only meaningful (and only ever sent) alongside status="resolved" — the outcome screen.
+    outcome_notes = serializers.CharField(required=False, allow_blank=True)
+    outcome_photo_url = serializers.CharField(required=False, allow_blank=True)
+
+
+class OfferCreateSerializer(serializers.Serializer):
+    offer_type = serializers.ChoiceField(choices=[c.value for c in OfferType])
