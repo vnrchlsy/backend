@@ -25,6 +25,11 @@ INSTALLED_APPS = [
     "django.contrib.gis",   # Sagip (US-S1) uses PostGIS: PointField + spatial queries
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
+    # US-SEC3 · TOTP for the Django admin. django_otp's own migrations create the device
+    # tables; otp_totp is the one factor we support (no SMS/email OTP for staff — a
+    # phished password alone must never be enough to reach gov IDs).
+    "django_otp",
+    "django_otp.plugins.otp_totp",
     "accounts",
     "verifications",
     "listings",
@@ -42,6 +47,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # US-SEC3 · after AuthenticationMiddleware, mirroring it: populates
+    # request.user.otp_device / is_verified() from the session, which
+    # accounts.apps.AccountsConfig.ready()'s OTPAdminSite swap then gates on.
+    "django_otp.middleware.OTPMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -116,3 +125,14 @@ OTP_MAX_ATTEMPTS = 5
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an
 # older consent is distinguishable from consent to the current text.
 TERMS_VERSION = "2026-08-01"
+
+# US-SEC3 · session hardening for the reviewer surface. Gated on DEBUG rather than
+# hardcoded true: the *_SECURE flags require HTTPS to even set the cookie, which the
+# local/dev/test runserver never serves — hardcoding them would silently break every
+# admin session (and every admin_client-based test) outside of a TLS-terminated deploy.
+# SESSION_COOKIE_AGE is short because the only session-cookie consumer in this app is
+# the staff admin (the mobile/API surface is JWT-only, see the INSTALLED_APPS note above).
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_AGE = 3600  # 1 hour
+OTP_TOTP_ISSUER = "Kupkop PH Admin"

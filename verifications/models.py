@@ -120,3 +120,29 @@ class AccountCapability(models.Model):
         db_table = "account_capability"
         constraints = [models.UniqueConstraint(fields=["account", "capability"],
                                                name="uq_account_capability")]
+
+
+class VerificationAccessLog(models.Model):
+    """US-SEC3 · who saw a verification request's identity documents, and when.
+
+    Decisions were already attributable (VerificationRequest.reviewed_by/_at) — this
+    covers *views*, the RA 10173 accountability gap: a reviewer can look at a gov ID
+    without ever deciding on it. One row per admin change-view load (see
+    VerificationRequestAdmin.change_view); append-only, no admin registration, no
+    update/delete path — a viewing log that could itself be edited proves nothing.
+    """
+    log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    verification = models.ForeignKey(VerificationRequest, on_delete=models.CASCADE,
+                                     related_name="access_log")
+    # A staffer can view before accounts.staff.reviewer_account() resolves them to an
+    # Account (e.g. is_staff=True with no StaffProfile yet) — staff_username is always
+    # captured so a view is never silently unattributed; viewer is the derived Account
+    # when the staff bridge (US-R1) links one.
+    viewer = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="+")
+    staff_username = models.CharField(max_length=150)
+    viewed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "verification_access_log"
+        indexes = [models.Index(fields=["verification", "-viewed_at"])]

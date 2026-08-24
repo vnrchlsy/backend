@@ -6,6 +6,7 @@ first. Per-document review, the tier-derived checklist and the approve/reject ac
 (US-R3–R6) build on this registration.
 """
 from django.contrib import admin, messages
+from django.contrib.admin.utils import unquote
 from django.db import transaction
 from django.db.models import Case, IntegerField, Value, When
 from django.template.response import TemplateResponse
@@ -14,7 +15,7 @@ from django.utils.html import format_html, format_html_join
 from accounts.staff import reviewer_account
 from common.storage import signed_get_url
 from shelter.models import ShelterProfile
-from verifications.models import VerificationRequest
+from verifications.models import VerificationAccessLog, VerificationRequest
 from verifications.review import (ReviewError, approve_request, reject_request,
                                   request_more_info, review_document)
 from verifications.rules import review_checklist
@@ -178,6 +179,21 @@ class VerificationRequestAdmin(admin.ModelAdmin):
         # A verification request is the audit trail of a trust decision — never deletable
         # from the reviewer surface.
         return False
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        # US-SEC3 · this is the one page that renders identity documents
+        # (documents_preview, above) — log the view itself, not just eventual decisions.
+        # Logged unconditionally (GET render or a POST that re-renders, e.g. needs_info's
+        # intermediate page still shows documents_preview) rather than gated on method,
+        # since the documents are on the page either way. staff_username is captured even
+        # when reviewer_account() can't resolve one, so a view is never unattributed.
+        # Guarded on existence first — a bad/deleted object_id must still 404 cleanly
+        # rather than raise on an FK to nothing.
+        if self.get_queryset(request).filter(pk=unquote(object_id)).exists():
+            VerificationAccessLog.objects.create(
+                verification_id=object_id, viewer=reviewer_account(request.user),
+                staff_username=request.user.get_username())
+        return super().change_view(request, object_id, form_url, extra_context)
 
     @admin.display(description="Applicant")
     def applicant(self, obj):
