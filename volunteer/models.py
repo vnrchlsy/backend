@@ -101,7 +101,8 @@ class VolunteerSignup(models.Model):
     class Meta:
         db_table = "volunteer_signup"
         indexes = [models.Index(fields=["volunteer_account"], name="idx_volunteer_signup_walker"),
-                  models.Index(fields=["status"], name="idx_volunteer_signup_status")]
+                  models.Index(fields=["status"], name="idx_volunteer_signup_status"),
+                  models.Index(fields=["assigned_listing"], name="idx_volunteer_signup_listing")]
         constraints = [
             models.UniqueConstraint(fields=["shift", "volunteer_account"],
                                     name="idx_volunteer_signup_pair"),
