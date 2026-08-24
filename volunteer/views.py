@@ -192,3 +192,80 @@ class ShiftSignupView(APIView):
                body=f"{request.user.display_name} wants to join.",
                data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
         return Response({"signup_id": str(signup.pk), "status": signup.status}, status=201)
+
+
+def _load_signup_for_shelter(signup_id, user):
+    """Fetch a signup and confirm the caller's shelter posted its shift.
+    Returns (signup, None) or (None, error_response)."""
+    signup = (VolunteerSignup.objects.select_related("shift", "volunteer_account")
+              .filter(pk=signup_id).first())
+    if signup is None:
+        return None, _not_found("signup")
+    if signup.shift.shelter_account_id != user.pk:
+        return None, Response({"error": {"code": "not_your_shift",
+                                         "message": "Only the posting shelter can do this"}},
+                              status=403)
+    return signup, None
+
+
+class SignupApproveView(APIView):
+    """US-V4 · approve a request, capacity-safe.
+
+    ⚠️ The capacity check recounts INSIDE `transaction.atomic()` after
+    `select_for_update()` on the shift row. A plain count-then-write lets two concurrent
+    approvals both observe a free slot and both commit, overfilling the shift — the
+    difference between `capacity` being an enforced invariant and a UI-only suggestion.
+    Same pattern as `sagip/views.py::ReportClaimView`'s claim exclusivity.
+    """
+    permission_classes = [IsShelter]
+
+    def post(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        if signup.status != SignupStatus.REQUESTED:
+            return Response({"error": {"code": "not_pending",
+                                       "message": "This request was already decided"}},
+                            status=409)
+
+        with transaction.atomic():
+            shift = (VolunteerShift.objects.select_for_update()
+                     .get(pk=signup.shift_id))          # the lock
+            approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
+            if approved >= shift.capacity:
+                return Response({"error": {"code": "shift_full",
+                                           "message": "This activity is already full"}},
+                                status=409)
+
+            set_signup_status(signup, SignupStatus.APPROVED)
+            if approved + 1 >= shift.capacity and shift.status == ShiftStatus.OPEN:
+                shift.status = ShiftStatus.FULL
+                shift.save(update_fields=["status", "updated_at"])
+
+            notify(signup.volunteer_account, "shift_confirmed",
+                   title="Your shift is confirmed",
+                   body="The shelter approved your request.",
+                   data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
+        return Response({"status": SignupStatus.APPROVED})
+
+
+class SignupDeclineView(APIView):
+    """US-V4 · decline a request. Always allowed, never automatic, and never silent — a
+    declined volunteer must not be left in an indefinite pending state. No lock: declining
+    frees nothing and races with nothing."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        if signup.status != SignupStatus.REQUESTED:
+            return Response({"error": {"code": "not_pending",
+                                       "message": "This request was already decided"}},
+                            status=409)
+        set_signup_status(signup, SignupStatus.DECLINED)
+        notify(signup.volunteer_account, "signup_declined",
+               title="Your shift request wasn't accepted",
+               body="The shelter declined this request.",
+               data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
+        return Response({"status": SignupStatus.DECLINED})
