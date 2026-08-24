@@ -1,9 +1,19 @@
+from rest_framework.exceptions import Throttled
 from rest_framework.views import exception_handler
 
 
 def error_handler(exc, context):
     response = exception_handler(exc, context)
     if response is None:
+        return response
+    # US-SEC2 · a Throttled exception's DRF response is {"detail": "..."} like any other
+    # APIException, so it would otherwise fall into the generic branch below and lose
+    # `exc.wait` (the seconds-to-retry DRF already computed) — special-cased so the story's
+    # documented shape (`details: {retry_after}`) is real, not aspirational.
+    if isinstance(exc, Throttled):
+        response.data = {"error": {"code": "throttled",
+                                   "message": "Too many requests — try again shortly.",
+                                   "details": {"retry_after": exc.wait}}}
         return response
     detail = response.data
     code = getattr(exc, "default_code", "error")

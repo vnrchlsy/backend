@@ -88,7 +88,14 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.AccountJWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"otp_resend_min": "1/min", "otp_resend_hour": "5/hour"},
+    # US-SEC2 · policy numbers, not code constants — revisit with real traffic data.
+    "DEFAULT_THROTTLE_RATES": {
+        "otp_resend_min": "1/min", "otp_resend_hour": "5/hour",
+        "login_ip": "20/hour", "login_identifier": "10/hour",
+        "signup_ip": "10/hour",
+        "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
+        "report_create": "20/day", "offer_create": "20/hour",
+    },
     "EXCEPTION_HANDLER": "common.errors.error_handler",
 }
 

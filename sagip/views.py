@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.service import notify
 from sagip.geo import centroid_for, coarsen_point
@@ -43,6 +44,7 @@ class ReportsCreateView(APIView):
     wall and resumes the report after signup). `is_anonymous` hides the reporter from other
     users, but the row still records `reporter_account_id`."""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ReportCreateThrottle]  # US-SEC2 · per-account, 20/day
 
     def post(self, request):
         s = ReportCreateSerializer(data=request.data)
@@ -229,6 +231,7 @@ class ReportOffersView(APIView):
     resolved case has nothing left to offer on. **Never moves `stray_report.status`** —
     an offer answers a different question than a claim does."""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [OfferCreateThrottle]  # US-SEC2 · per-account, 20/hour
 
     def post(self, request, report_id):
         report = StrayReport.objects.filter(pk=report_id).first()

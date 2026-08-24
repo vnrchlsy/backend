@@ -14,11 +14,15 @@ from accounts.serializers import (AccountTokenRefreshSerializer, EmailSerializer
 from accounts.tokens import tokens_for
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, issue_code, verify_code
-from common.throttles import OtpResendHourThrottle, OtpResendMinuteThrottle
+from common.throttles import (LoginIdentifierThrottle, LoginIpThrottle,
+                              OtpResendHourThrottle, OtpResendMinuteThrottle,
+                              PasswordForgotIdentifierThrottle, PasswordForgotIpThrottle,
+                              SignupIpThrottle)
 
 
 class SignupView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [SignupIpThrottle]
 
     def post(self, request):
         serializer = SignupSerializer(data=request.data)
@@ -92,6 +96,11 @@ class EmailResendView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    # US-SEC2 · both apply (IP catches credential stuffing across many accounts from one
+    # source; identifier catches one target account hammered from many IPs). Neither
+    # throttle queries the DB, so the enumeration asymmetry (§12.1) stays intact — the
+    # 429 is identical whether or not the submitted email exists.
+    throttle_classes = [LoginIpThrottle, LoginIdentifierThrottle]
 
     def post(self, request):
         email = request.data.get("email", "")
@@ -133,7 +142,11 @@ class AccountTokenRefreshView(TokenRefreshView):
 
 class PasswordForgotView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [OtpResendMinuteThrottle, OtpResendHourThrottle]
+    # US-SEC2 · was riding the generic OTP-resend buckets (1/min, 5/hr — tuned for a
+    # different threat: running up SMS/email cost via resend-spam on ONE code). Forgot-
+    # password is closer to credential-stuffing/enumeration abuse, so it gets its own
+    # scope at a wider rate, on the same IP+identifier pair as login.
+    throttle_classes = [PasswordForgotIpThrottle, PasswordForgotIdentifierThrottle]
 
     def post(self, request):
         s = EmailSerializer(data=request.data)
