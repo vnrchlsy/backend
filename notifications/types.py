@@ -35,6 +35,11 @@ _TYPES = [
     NotificationType("offer_received", "{report_id, offer_id}"),
     NotificationType("inquiry_received", "{listing_id, inquiry_id}"),
     NotificationType("stage_advanced", "{inquiry_id, stage_key}"),
+    NotificationType("signup_requested", "{shift_id, signup_id}"),
+    NotificationType("shift_confirmed", "{shift_id, signup_id}"),
+    NotificationType("signup_declined", "{shift_id, signup_id}"),
+    NotificationType("shift_cancelled_by_shelter", "{shift_id}"),
+    NotificationType("shift_reminder", "{shift_id, signup_id, window}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}
