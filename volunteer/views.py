@@ -116,15 +116,18 @@ class ShelterShiftCancelView(APIView):
 class ShiftsBrowseView(APIView):
     """US-V3 · public browse. Guests may look; requesting requires an account.
 
-    Only `open` shifts with a future start are shown — `closed` (terminal) and `full`
-    activities are not accepting requests, so listing them would just invite a
-    `409 shift_not_open` on request.
+    Shows `open` and `full` shifts with a future start. `full` is transient, not
+    terminal — a cancelled signup flips the shift back to `open` — so a full shift is
+    still a live candidate, not dead listing inventory; it's returned with
+    `slots_left: 0` and the client decides how to render it (e.g. disabled). Only
+    `closed` (terminal) and past shifts are excluded.
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
         qs = (VolunteerShift.objects
-              .filter(status=ShiftStatus.OPEN, starts_at__gt=timezone.now())
+              .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
+                      starts_at__gt=timezone.now())
               .order_by("starts_at"))
         shift_type = request.query_params.get("type")
         if shift_type:

@@ -41,6 +41,17 @@ def test_browse_hides_closed_shifts(client):
 
 
 @pytest.mark.django_db
+def test_browse_includes_full_shifts_as_slots_left_zero(client):
+    s = _shift(status=ShiftStatus.FULL, capacity=1)
+    VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
+                                   status=SignupStatus.APPROVED)
+    results = client.get("/api/v1/shifts").json()["results"]
+    assert str(s.pk) in [r["shift_id"] for r in results]
+    full = next(r for r in results if r["shift_id"] == str(s.pk))
+    assert full["slots_left"] == 0
+
+
+@pytest.mark.django_db
 def test_detail_reports_slots_left(client):
     s = _shift(capacity=3)
     VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
