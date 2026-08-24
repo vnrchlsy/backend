@@ -39,11 +39,25 @@ def test_cancelling_inside_the_cutoff_is_recorded_as_late(client):
 
 
 @pytest.mark.django_db
-def test_the_boundary_is_not_late(client):
-    """Exactly at the cutoff is still free — 'free up to 12h before'."""
-    shift, su = _booked(hours_out=13)
+def test_just_outside_the_cutoff_is_not_late(client):
+    """12h + 1 minute out is still free — pins the constant against an off-by-one
+    (a CANCEL_CUTOFF_HOURS of 11 or 13 would flip this)."""
+    shift, su = _booked(hours_out=48)
+    shift.starts_at = timezone.now() + timezone.timedelta(hours=12, minutes=1)
+    shift.save(update_fields=["starts_at"])
     assert client.post(f"/api/v1/signups/{su.pk}/cancel",
                        **_hdr(su.volunteer_account)).json()["was_late"] is False
+
+
+@pytest.mark.django_db
+def test_just_inside_the_cutoff_is_late(client):
+    """12h - 1 minute out is recorded as late — pins the constant against an off-by-one
+    (a CANCEL_CUTOFF_HOURS of 11 or 13 would flip this)."""
+    shift, su = _booked(hours_out=48)
+    shift.starts_at = timezone.now() + timezone.timedelta(hours=11, minutes=59)
+    shift.save(update_fields=["starts_at"])
+    assert client.post(f"/api/v1/signups/{su.pk}/cancel",
+                       **_hdr(su.volunteer_account)).json()["was_late"] is True
 
 
 @pytest.mark.django_db
@@ -79,3 +93,16 @@ def test_lateness_is_computed_server_side_not_taken_from_the_client(client):
     res = client.post(f"/api/v1/signups/{su.pk}/cancel", {"was_late": False},
                       content_type="application/json", **_hdr(su.volunteer_account))
     assert res.json()["was_late"] is True
+
+
+@pytest.mark.django_db
+def test_a_closed_shift_is_never_reopened_by_a_cancel(client):
+    """`closed` is terminal. Force it directly (bypassing the normal cascade, which would
+    itself cancel the signup) so an approved signup survives on a shift that is closed for
+    an unrelated reason — the `full -> open` guard must not touch it either way."""
+    shift, su = _booked(hours_out=48, capacity=1)
+    VolunteerShift.objects.filter(pk=shift.pk).update(status=ShiftStatus.CLOSED)
+    res = client.post(f"/api/v1/signups/{su.pk}/cancel", **_hdr(su.volunteer_account))
+    assert res.status_code == 200
+    shift.refresh_from_db()
+    assert shift.status == ShiftStatus.CLOSED

@@ -320,6 +320,15 @@ class SignupCancelView(APIView):
 
     Cancelling releases capacity, so a `full` shift returns to `open` — under the same row
     lock the approve path uses, for consistency. `closed` stays terminal.
+
+    ⚠️ The `not_cancellable` status check is re-verified under lock, on a freshly re-fetched
+    signup row, after the shift lock is taken — same TOCTOU fix as SignupApproveView (see its
+    docstring), propagated here. Two concurrent cancels (double-tap, mobile retry-on-timeout)
+    both pass the pre-lock ownership check before either commits; without a signup-row lock and
+    a fresh re-check, the second request's stale in-memory `signup` would let `set_signup_status`
+    clobber `cancelled_at` with the second, later timestamp — destroying the exact instant the
+    12h free-vs-late audit depends on. Lock order is shift-then-signup, same as
+    SignupApproveView, so the two views can never deadlock against each other.
     """
     permission_classes = [IsAuthenticated]
 
@@ -332,17 +341,21 @@ class SignupCancelView(APIView):
             return Response({"error": {"code": "not_your_signup",
                                        "message": "You can only cancel your own signup"}},
                             status=403)
-        if signup.status not in (SignupStatus.REQUESTED, SignupStatus.APPROVED):
-            return Response({"error": {"code": "not_cancellable",
-                                       "message": "This signup can no longer be cancelled"}},
-                            status=409)
 
         now = timezone.now()
-        cutoff = signup.shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)
-        was_late = now > cutoff
-
         with transaction.atomic():
-            shift = VolunteerShift.objects.select_for_update().get(pk=signup.shift_id)
+            shift = (VolunteerShift.objects.select_for_update()
+                     .get(pk=signup.shift_id))              # lock 1: the shift
+            signup = (VolunteerSignup.objects.select_for_update()
+                      .get(pk=signup.pk))                    # lock 2: the signup
+            if signup.status not in (SignupStatus.REQUESTED, SignupStatus.APPROVED):
+                return Response({"error": {"code": "not_cancellable",
+                                           "message": "This signup can no longer be cancelled"}},
+                                status=409)
+
+            cutoff = shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)
+            was_late = now > cutoff
+
             set_signup_status(signup, SignupStatus.CANCELLED, now=now)
             if shift.status == ShiftStatus.FULL:
                 approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
