@@ -216,6 +216,16 @@ class SignupApproveView(APIView):
     approvals both observe a free slot and both commit, overfilling the shift — the
     difference between `capacity` being an enforced invariant and a UI-only suggestion.
     Same pattern as `sagip/views.py::ReportClaimView`'s claim exclusivity.
+
+    ⚠️ The `not_pending` status check is ALSO re-verified under lock, on a freshly
+    re-fetched signup row, after the shift lock is taken. Reading `signup.status` only
+    before the lock (as the first cut of this view did) is a TOCTOU hole: two concurrent
+    requests on the same signup — a double-tap, a client retry, or a decline racing an
+    approve — can both pass the pre-lock check before either commits, letting a stale
+    in-memory `signup` silently overwrite a DECLINED row back to APPROVED, or double-apply
+    an approval. Lock order is always shift-then-signup (see SignupDeclineView, which
+    takes only the signup lock and never the shift's) so the two views can never deadlock
+    against each other.
     """
     permission_classes = [IsShelter]
 
@@ -223,14 +233,17 @@ class SignupApproveView(APIView):
         signup, error = _load_signup_for_shelter(signup_id, request.user)
         if error:
             return error
-        if signup.status != SignupStatus.REQUESTED:
-            return Response({"error": {"code": "not_pending",
-                                       "message": "This request was already decided"}},
-                            status=409)
 
         with transaction.atomic():
             shift = (VolunteerShift.objects.select_for_update()
-                     .get(pk=signup.shift_id))          # the lock
+                     .get(pk=signup.shift_id))          # lock 1: the shift
+            signup = (VolunteerSignup.objects.select_for_update()
+                      .get(pk=signup.pk))                # lock 2: the signup
+            if signup.status != SignupStatus.REQUESTED:
+                return Response({"error": {"code": "not_pending",
+                                           "message": "This request was already decided"}},
+                                status=409)
+
             approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
             if approved >= shift.capacity:
                 return Response({"error": {"code": "shift_full",
@@ -251,21 +264,34 @@ class SignupApproveView(APIView):
 
 class SignupDeclineView(APIView):
     """US-V4 · decline a request. Always allowed, never automatic, and never silent — a
-    declined volunteer must not be left in an indefinite pending state. No lock: declining
-    frees nothing and races with nothing."""
+    declined volunteer must not be left in an indefinite pending state.
+
+    ⚠️ Locks ONLY the signup row (never the shift) — declining frees no capacity, so it
+    has nothing to recount. This IS still a real lock, unlike the first cut of this view:
+    an approve racing the same signup takes shift-then-signup, so a lock here is required
+    to close the same TOCTOU hole described on SignupApproveView (an unlocked decline
+    could silently lose to, or be silently overwritten by, a concurrent approve on the
+    same row). Because this view never acquires the shift lock, it can never deadlock
+    against SignupApproveView's shift→signup order — it only ever waits on the signup,
+    which approve also always acquires last.
+    """
     permission_classes = [IsShelter]
 
     def post(self, request, signup_id):
         signup, error = _load_signup_for_shelter(signup_id, request.user)
         if error:
             return error
-        if signup.status != SignupStatus.REQUESTED:
-            return Response({"error": {"code": "not_pending",
-                                       "message": "This request was already decided"}},
-                            status=409)
-        set_signup_status(signup, SignupStatus.DECLINED)
-        notify(signup.volunteer_account, "signup_declined",
-               title="Your shift request wasn't accepted",
-               body="The shelter declined this request.",
-               data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
+
+        with transaction.atomic():
+            signup = (VolunteerSignup.objects.select_for_update()
+                      .get(pk=signup.pk))                # the only lock this view takes
+            if signup.status != SignupStatus.REQUESTED:
+                return Response({"error": {"code": "not_pending",
+                                           "message": "This request was already decided"}},
+                                status=409)
+            set_signup_status(signup, SignupStatus.DECLINED)
+            notify(signup.volunteer_account, "signup_declined",
+                   title="Your shift request wasn't accepted",
+                   body="The shelter declined this request.",
+                   data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
         return Response({"status": SignupStatus.DECLINED})
