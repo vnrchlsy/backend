@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "notifications",
     "sagip",
     "moderation",
+    "volunteer",
 ]
 
 # SecurityMiddleware + CommonMiddleware served the JWT API alone in Sprint 1. The admin
@@ -127,6 +128,13 @@ OTP_MAX_ATTEMPTS = 5
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an
 # older consent is distinguishable from consent to the current text.
 TERMS_VERSION = "2026-08-01"
+
+# D-S5-1 · the liability waiver is a versioned legal document, unlike the per-shift
+# contact-sharing opt-in. Bump when the waiver text changes so an older acceptance is
+# distinguishable from acceptance of the current text.
+# ⚠️ The waiver TEXT does not exist yet — this version points at a document that must be
+# written before Kawang-Gawa reaches real volunteers (a launch blocker for M3).
+WAIVER_VERSION = "2026-08-24"
 
 # US-SEC3 · session hardening for the reviewer surface. Gated on DEBUG rather than
 # hardcoded true: the *_SECURE flags require HTTPS to even set the cookie, which the
