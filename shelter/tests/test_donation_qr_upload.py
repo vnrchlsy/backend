@@ -33,7 +33,7 @@ def test_creates_a_new_unverified_qr(client):
 
 @pytest.mark.django_db
 def test_a_non_shelter_account_is_refused(client):
-    owner = AccountFactory(account_type="owner")
+    owner = AccountFactory(account_type="personal")
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "x",
                        "file_url": "https://example.invalid/qr1.png"},
