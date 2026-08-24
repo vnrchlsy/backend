@@ -46,6 +46,20 @@ def test_cancelled_at_survives_a_later_write():
 
 
 @pytest.mark.django_db
+def test_a_later_status_change_does_not_clobber_cancelled_at():
+    """set_signup_status itself, called a second time, must not touch a cancelled_at
+    stamped by an earlier call — the raw-save test above only proves Django's
+    update_fields mechanic, not this function's behavior."""
+    su = _signup()
+    set_signup_status(su, SignupStatus.CANCELLED)
+    su.refresh_from_db()
+    stamped = su.cancelled_at
+    set_signup_status(su, SignupStatus.COMPLETED)
+    su.refresh_from_db()
+    assert su.cancelled_at == stamped
+
+
+@pytest.mark.django_db
 def test_non_cancel_transitions_leave_cancelled_at_null():
     su = _signup()
     set_signup_status(su, SignupStatus.COMPLETED)
