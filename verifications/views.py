@@ -1,14 +1,18 @@
+import uuid
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.media import policy_for
+from common.storage import create_presigned_upload
 from verifications.models import (AccountCapability, VerificationDocument,
                                   VerificationRequest)
 from verifications.rules import (MIN_RESCUE_PHOTOS, base_complete, missing_docs,
                                  required_doc_types)
-from verifications.serializers import VerificationSerializer
+from verifications.serializers import PresignSerializer, VerificationSerializer
 
 
 def _shelter_doc_error(tier, docs, bai_pending):
@@ -96,13 +100,32 @@ class ResubmitDocumentView(APIView):
 
 
 class PresignView(APIView):
+    """US-D2 · `key` is always server-chosen (`{purpose}/{account_id}/{uuid}`) — never a
+    client-supplied path, so a caller can't overwrite or guess another account's object.
+    `content_type`/size are checked against `purpose`'s policy here (a clean 422 before
+    any AWS call) AND passed to S3 as presigned-POST conditions (harder to bypass) — see
+    `common/media.py::PURPOSES` and `common/storage.py::create_presigned_upload`. No
+    bucket configured (the current dev slice) still returns real `example.invalid`
+    placeholders, same shape as before this story."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # dev stub: no S3 in this slice; returns a placeholder the client can submit
-        key = f"dev-uploads/{request.user.account_id}/{timezone.now().timestamp()}"
-        return Response({"upload_url": "https://example.invalid/dev-upload",
-                         "fields": {}, "file_url": f"https://example.invalid/{key}"})
+        s = PresignSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        purpose, content_type = s.validated_data["purpose"], s.validated_data["content_type"]
+
+        policy = policy_for(purpose)
+        if policy is None:
+            return Response({"error": {"code": "purpose_unknown",
+                                       "message": f"Unknown upload purpose: {purpose}"}}, status=422)
+        visibility, allowed_types, max_bytes = policy
+        if content_type not in allowed_types:
+            return Response({"error": {"code": "bad_content_type",
+                                       "message": f"{content_type} isn't allowed for {purpose}"}},
+                            status=422)
+
+        key = f"{purpose}/{request.user.account_id}/{uuid.uuid4()}"
+        return Response(create_presigned_upload(visibility, key, content_type, max_bytes))
 
 
 class VerificationCreateView(APIView):

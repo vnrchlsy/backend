@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
 
+class PresignSerializer(serializers.Serializer):
+    # `purpose` stays a plain CharField (not ChoiceField) — an unknown purpose gets the
+    # story's own documented `422 purpose_unknown`, not a generic field-validation 400.
+    purpose = serializers.CharField()
+    content_type = serializers.CharField()
+
+
 class DocumentSerializer(serializers.Serializer):
     doc_type = serializers.CharField()
     file_url = serializers.CharField()

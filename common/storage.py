@@ -1,28 +1,44 @@
-"""Access-restricted media signing seam (US-R3).
+"""Media signing/upload seam — US-R3 (signed GET) + US-D2 (real presigned upload).
 
-Verification documents live in a private bucket; the reviewer sees them via **short-lived
-signed GET URLs**, never a public link. Every render path goes through `signed_get_url`,
-so the day a real S3 bucket is configured only this function changes — nothing emits a raw
-object URL directly.
+**Two buckets, by visibility** (US-D2): `MEDIA_S3_BUCKET_PUBLIC` (pet/listing/report
+photos, avatars — CDN-cacheable, world-readable) and `MEDIA_S3_BUCKET_RESTRICTED`
+(verification docs — gov ID, proof of billing — no public read, ever; reached only via
+`signed_get_url`, TTL ≤ 5 min, minted fresh per page render). Every render/upload path
+goes through this module, so the day real buckets are configured only this file changes —
+nothing elsewhere ever builds or emits a raw S3 object URL itself.
 
-This is the same dev-stub pattern the OTP sender and social-auth seam use: with no bucket
-configured (the current dev slice, where `POST /media/presign` returns
-`https://example.invalid/...` placeholders), signing degrades to returning the stored
-reference so review still renders. Media handling is finalized in Sprint 3.
+**Still a dev stub with no bucket configured** — the same pattern the OTP sender and
+social-auth seam use: `POST /media/presign` returns `https://example.invalid/...`
+placeholders, `signed_get_url` returns the stored reference unchanged, `delete_object` is
+a no-op. Wiring an actual bucket (env vars, IAM, lifecycle rules) stays a deploy-time task
+for whoever has AWS access — this module's job is that the *code path* is real and tested
+against a mocked S3 (`moto`), not that a bucket is live.
 """
 from django.conf import settings
+
+from common.media import PUBLIC, RESTRICTED  # noqa: F401 — re-exported for callers
 
 # Signed URLs are minted fresh on each page render and must not outlive it.
 SIGNED_URL_TTL = 300  # seconds (5 minutes)
 
 
-def signed_get_url(file_url, expires_in=SIGNED_URL_TTL):
-    """A short-lived signed GET URL for a stored document reference.
+def _bucket_setting(visibility):
+    return "MEDIA_S3_BUCKET_RESTRICTED" if visibility == RESTRICTED else "MEDIA_S3_BUCKET_PUBLIC"
 
-    Dev (no `MEDIA_S3_BUCKET`): returns `file_url` unchanged. Production signs the S3
-    object with boto3 (imported lazily so the dev slice needs no AWS dependency).
+
+def _bucket_name(visibility):
+    return getattr(settings, _bucket_setting(visibility), "")
+
+
+def signed_get_url(file_url, visibility=RESTRICTED, expires_in=SIGNED_URL_TTL):
+    """A short-lived signed GET URL for a stored object reference.
+
+    Dev (no bucket configured for `visibility`): returns `file_url` unchanged.
+    Production signs the S3 object with boto3 (imported lazily so the dev slice needs no
+    AWS dependency). Defaults to `visibility=restricted` — every current caller
+    (`verifications/admin.py`'s document preview) is signing a verification document.
     """
-    bucket = getattr(settings, "MEDIA_S3_BUCKET", "")
+    bucket = _bucket_name(visibility)
     if not bucket:
         return file_url
     import boto3  # prod-only; not a dev dependency
@@ -32,18 +48,45 @@ def signed_get_url(file_url, expires_in=SIGNED_URL_TTL):
         "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in)
 
 
-def delete_object(file_url):
+def delete_object(file_url, visibility=RESTRICTED):
     """Delete the stored object backing `file_url` (US-SEC4 retention purge).
 
     Same dev-stub seam as `signed_get_url`: no bucket configured means no real object
-    ever existed behind the `https://example.invalid/...` placeholder, so this is a
-    no-op today. Once US-D2 wires a real bucket, this is the one place that starts
-    issuing real deletes — `purge_expired_documents` itself doesn't change.
+    ever existed behind the placeholder, so this is a no-op today. Defaults to
+    `visibility=restricted` — every current caller (`verifications/purge.py`) purges
+    identity documents.
     """
-    bucket = getattr(settings, "MEDIA_S3_BUCKET", "")
+    bucket = _bucket_name(visibility)
     if not bucket:
         return
     import boto3  # prod-only; not a dev dependency
 
     key = file_url.split(f"{bucket}/", 1)[-1]
     boto3.client("s3").delete_object(Bucket=bucket, Key=key)
+
+
+def create_presigned_upload(visibility, key, content_type, max_bytes, expires_in=SIGNED_URL_TTL):
+    """A presigned POST policy for a client to upload `key` directly to S3 (US-D2) —
+    `key` is always server-chosen (see `verifications.views.PresignView`), never a
+    client-supplied path. Enforces `content_type` and a `[0, max_bytes]` size range as
+    POST policy *conditions*, so S3 itself refuses an upload that doesn't match what the
+    caller declared — the application-level checks in the view are the first gate (a
+    clean 422 before any AWS call), this is the second, harder-to-bypass one.
+
+    Dev (no bucket configured for `visibility`): the same `example.invalid` placeholder
+    every other dev-stub path returns — `upload_url`/`fields` a client can still "submit"
+    against nothing, `file_url` deterministic from `key`.
+    """
+    bucket = _bucket_name(visibility)
+    if not bucket:
+        return {"upload_url": "https://example.invalid/dev-upload", "fields": {},
+                "file_url": f"https://example.invalid/{key}"}
+    import boto3  # prod-only; not a dev dependency
+
+    presigned = boto3.client("s3").generate_presigned_post(
+        Bucket=bucket, Key=key,
+        Fields={"Content-Type": content_type},
+        Conditions=[{"Content-Type": content_type}, ["content-length-range", 0, max_bytes]],
+        ExpiresIn=expires_in)
+    return {"upload_url": presigned["url"], "fields": presigned["fields"],
+           "file_url": f"https://{bucket}/{key}"}
