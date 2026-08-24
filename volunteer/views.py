@@ -1,12 +1,15 @@
-from django.db import transaction
-from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
-from volunteer.serializers import ShiftCreateSerializer, ShiftPatchSerializer
+from volunteer.serializers import (ShiftCreateSerializer, ShiftPatchSerializer,
+                                   SignupCreateSerializer)
 from volunteer.status import set_signup_status
 
 PAGE_SIZE = 20
@@ -108,3 +111,81 @@ class ShelterShiftCancelView(APIView):
                        body="The shelter cancelled this activity.",
                        data={"shift_id": str(shift.pk)})
         return Response({"cancelled_signups": len(affected)})
+
+
+class ShiftsBrowseView(APIView):
+    """US-V3 · public browse. Guests may look; requesting requires an account.
+
+    Only `open` shifts with a future start are shown — `closed` (terminal) and `full`
+    activities are not accepting requests, so listing them would just invite a
+    `409 shift_not_open` on request.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = (VolunteerShift.objects
+              .filter(status=ShiftStatus.OPEN, starts_at__gt=timezone.now())
+              .order_by("starts_at"))
+        shift_type = request.query_params.get("type")
+        if shift_type:
+            qs = qs.filter(type=shift_type)
+        return Response({"results": [_shift_repr(s) for s in qs[:PAGE_SIZE]], "next": None})
+
+
+class ShiftDetailView(APIView):
+    """US-V3 · public shift detail, carrying `slots_left` for the '4 of 6 left' line."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, shift_id):
+        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        if shift is None:
+            return _not_found()
+        return Response(_shift_repr(shift))
+
+
+class ShiftSignupView(APIView):
+    """US-V3 · request a shift.
+
+    Two separate consents (see VolunteerSignup's docstring). The waiver is required and
+    versioned (D-S5-1); contact-sharing is optional, per-shift, and only stamped when given.
+    `UNIQUE (shift, volunteer)` is enforced by the DB and caught here so a double-tap is a
+    clean 409 rather than a 500.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, shift_id):
+        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        if shift is None:
+            return _not_found()
+        if shift.status != ShiftStatus.OPEN:
+            return Response({"error": {"code": "shift_not_open",
+                                       "message": "This activity is not taking requests"}},
+                            status=409)
+
+        s = SignupCreateSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        if not d["waiver_accepted"]:
+            return Response({"error": {"code": "waiver_required",
+                                       "message": "The waiver must be accepted to join"}},
+                            status=422)
+
+        now = timezone.now()
+        sharing = d["contact_share_consent"]
+        try:
+            signup = VolunteerSignup.objects.create(
+                shift=shift, volunteer_account=request.user,
+                waiver_accepted=True, waiver_accepted_at=now,
+                waiver_version=settings.WAIVER_VERSION,
+                contact_share_consent=sharing,
+                contact_share_consent_at=now if sharing else None)
+        except IntegrityError:
+            return Response({"error": {"code": "already_requested",
+                                       "message": "You already requested this activity"}},
+                            status=409)
+
+        notify(shift.shelter_account, "signup_requested",
+               title="A volunteer requested a shift",
+               body=f"{request.user.display_name} wants to join.",
+               data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
+        return Response({"signup_id": str(signup.pk), "status": signup.status}, status=201)
