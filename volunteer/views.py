@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
+from volunteer.reliability import reliability_for
 from volunteer.serializers import (ShiftCreateSerializer, ShiftPatchSerializer,
                                    SignupCreateSerializer)
 from volunteer.status import set_signup_status
@@ -234,6 +235,14 @@ class SignupApproveView(APIView):
         if error:
             return error
 
+        rel = reliability_for(signup.volunteer_account)
+        if rel["needs_reapproval"] and not request.data.get("acknowledged_reapproval"):
+            # Server-enforced, not UI-enforced: a client must not skip the disclosure by
+            # omitting it. The shelter may still approve — this is a gate, never a ban.
+            return Response({"error": {"code": "reapproval_required",
+                                       "message": "This volunteer has 3 no-shows in a row",
+                                       "details": rel}}, status=409)
+
         with transaction.atomic():
             shift = (VolunteerShift.objects.select_for_update()
                      .get(pk=signup.shift_id))          # lock 1: the shift
@@ -295,3 +304,28 @@ class SignupDeclineView(APIView):
                    body="The shelter declined this request.",
                    data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
         return Response({"status": SignupStatus.DECLINED})
+
+
+class ShiftRequestsView(APIView):
+    """US-V5 · pending requests for one activity, each carrying its derived reliability
+    block. ⚠️ Only the four aggregate numbers cross this boundary (D-S5-2) — the payload is
+    built field-by-field rather than serialized off the related objects, so a stray
+    `select_related` can't leak another shelter's identity into it."""
+    permission_classes = [IsShelter]
+
+    def get(self, request, shift_id):
+        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        if shift is None:
+            return _not_found()
+        if shift.shelter_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_shift",
+                                       "message": "Only the posting shelter can see these"}},
+                            status=403)
+        pending = (shift.signups.filter(status=SignupStatus.REQUESTED)
+                   .select_related("volunteer_account").order_by("created_at"))
+        return Response({"results": [{
+            "signup_id": str(su.pk),
+            "volunteer": {"display_name": su.volunteer_account.display_name},
+            "requested_at": su.created_at.isoformat(),
+            "reliability": reliability_for(su.volunteer_account),
+        } for su in pending]})
