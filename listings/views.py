@@ -50,7 +50,9 @@ def _card(listing):
 def _poster_info(account):
     profile = ShelterProfile.objects.filter(account=account).first()
     addr = Address.objects.filter(account=account, is_primary=True).first()
-    return {"name": profile.org_name if profile else account.display_name,
+    # account_id lets the client link to US-Q2's public donate surface
+    # (GET /shelters/{account_id}/donation-qr) for a shelter poster.
+    return {"account_id": str(account.pk), "name": profile.org_name if profile else account.display_name,
             "is_shelter": profile is not None, "city": addr.city if addr else None}
 
 

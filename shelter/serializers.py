@@ -2,7 +2,7 @@ import re
 
 from rest_framework import serializers
 
-from shelter.models import OrgType, RegType, ShelterTier
+from shelter.models import OrgType, QrProvider, RegType, ShelterTier
 
 PRC_RE = re.compile(r"^\d{6,8}$")   # US-C1: format check only; the register lookup is a reviewer action
 
@@ -45,3 +45,13 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
         if value and not PRC_RE.match(value):
             raise serializers.ValidationError("PRC number must be 6–8 digits.")
         return value
+
+
+class DonationQrUploadSerializer(serializers.Serializer):
+    # US-Q1 · corrected against the DDL's actual donation_qr columns (provider/
+    # qr_image_url), not the story's shorthand "{ file_url, channel }" — provider is the
+    # DDL's real column name (gcash/maya), and every other file-carrying serializer in
+    # this codebase (e.g. ReportCreateSerializer.photos) already calls it file_url.
+    provider = serializers.ChoiceField(choices=QrProvider.values)
+    account_name = serializers.CharField(max_length=120)
+    file_url = serializers.CharField()

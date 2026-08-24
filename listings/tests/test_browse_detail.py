@@ -102,6 +102,8 @@ def test_detail_shows_the_org_name_for_a_shelter_poster(client):
 
     body = client.get(f"/api/v1/listings/{listing.pk}").json()
     assert body["poster"]["name"] == "Marikina AWG" and body["poster"]["is_shelter"] is True
+    # US-Q2 · the client needs this to link to GET /shelters/{account_id}/donation-qr.
+    assert body["poster"]["account_id"] == str(shelter.pk)
 
 
 @pytest.mark.django_db
