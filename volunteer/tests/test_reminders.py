@@ -77,6 +77,25 @@ def test_a_past_shift_is_not_reminded():
 
 
 @pytest.mark.django_db
+def test_a_shift_first_seen_inside_the_1h_window_gets_only_the_1h_reminder():
+    """A shift ~30 min out, never swept before, falls inside BOTH the (0,1h] and (0,24h]
+    ranges if those ranges are nested — producing a spurious 'starts 24 hours from now'
+    notification alongside the correct 1h one. Bands must be disjoint so this signup is
+    matched by the 1h band only."""
+    shift = VolunteerShift.objects.create(
+        shelter_account=AccountFactory(account_type="shelter"),
+        starts_at=timezone.now() + timezone.timedelta(minutes=30),
+        ends_at=timezone.now() + timezone.timedelta(minutes=30, hours=2),
+        capacity=2, status=ShiftStatus.OPEN)
+    su = VolunteerSignup.objects.create(shift=shift, volunteer_account=AccountFactory(),
+                                        status=SignupStatus.APPROVED, waiver_accepted=True)
+    remind_shifts()
+    assert _reminders(su) == 1
+    assert _reminders(su, "1h") == 1
+    assert _reminders(su, "24h") == 0
+
+
+@pytest.mark.django_db
 def test_run_sweeps_reports_the_volunteer_reminders(capsys):
     _approved(hours_out=20)
     call_command("run_sweeps")

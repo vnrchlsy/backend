@@ -16,20 +16,24 @@ from notifications.service import notify
 
 from .models import SignupStatus, VolunteerSignup
 
-# (window label, hours before the shift the window opens)
-REMINDER_WINDOWS = [("24h", 24), ("1h", 1)]
+# (label, upper_hours, lower_hours): remind when lower_h < (starts_at - now) <= upper_h.
+# Bands are disjoint so a shift within 1h is ONLY in the 1h band — it never also gets the
+# (wrong) 24h message. A shift that slips straight past the 24h band (cron downtime,
+# late walk-in approval) correctly gets only the 1h reminder, not a false "24h from now".
+REMINDER_WINDOWS = [("24h", 24, 1), ("1h", 1, 0)]
 
 
 def remind_shifts(now=None):
     """Send any due shift reminders. Idempotent. Returns the signups reminded."""
     now = now or timezone.now()
     reminded = []
-    for label, hours in REMINDER_WINDOWS:
-        opens_at = now + timezone.timedelta(hours=hours)
+    for label, upper_h, lower_h in REMINDER_WINDOWS:
+        lower = now + timezone.timedelta(hours=lower_h)
+        upper = now + timezone.timedelta(hours=upper_h)
         due = (VolunteerSignup.objects
                .filter(status=SignupStatus.APPROVED,
-                       shift__starts_at__gt=now,
-                       shift__starts_at__lte=opens_at)
+                       shift__starts_at__gt=lower,
+                       shift__starts_at__lte=upper)
                .select_related("shift", "volunteer_account"))
         for signup in due:
             already = Notification.objects.filter(
