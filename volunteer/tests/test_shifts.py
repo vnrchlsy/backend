@@ -74,6 +74,68 @@ def test_a_shelter_cannot_edit_another_shelters_shift(client):
     res = client.patch(f"{SHIFTS}/{sid}", {"capacity": 9},
                        content_type="application/json", **_hdr(_shelter()))
     assert res.status_code == 403
+    assert res.json()["error"]["code"] == "not_your_shift"
+
+
+@pytest.mark.django_db
+def test_a_foreign_shelter_cannot_cancel_another_shelters_shift(client):
+    owner = _shelter()
+    sid = client.post(SHIFTS, _payload(), content_type="application/json",
+                      **_hdr(owner)).json()["shift_id"]
+    res = client.post(f"{SHIFTS}/{sid}/cancel", **_hdr(_shelter()))
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "not_your_shift"
+
+
+@pytest.mark.django_db
+def test_cancelling_an_already_closed_shift_is_refused(client):
+    owner = _shelter()
+    sid = client.post(SHIFTS, _payload(), content_type="application/json",
+                      **_hdr(owner)).json()["shift_id"]
+    first = client.post(f"{SHIFTS}/{sid}/cancel", **_hdr(owner))
+    assert first.status_code == 200
+    res = client.post(f"{SHIFTS}/{sid}/cancel", **_hdr(owner))
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "shift_closed"
+
+
+@pytest.mark.django_db
+def test_bad_window_is_enforced_on_patch(client):
+    owner = _shelter()
+    sid = client.post(SHIFTS, _payload(), content_type="application/json",
+                      **_hdr(owner)).json()["shift_id"]
+    now = timezone.now()
+    res = client.patch(f"{SHIFTS}/{sid}",
+                       {"starts_at": (now + timezone.timedelta(days=3)).isoformat(),
+                        "ends_at": (now + timezone.timedelta(days=1)).isoformat()},
+                       content_type="application/json", **_hdr(owner))
+    assert res.status_code == 422
+    assert res.json()["error"]["code"] == "bad_window"
+
+
+@pytest.mark.django_db
+def test_cancel_cascade_skips_non_live_signups(client):
+    owner = _shelter()
+    sid = client.post(SHIFTS, _payload(), content_type="application/json",
+                      **_hdr(owner)).json()["shift_id"]
+    shift = VolunteerShift.objects.get(pk=sid)
+    approved, declined, cancelled = AccountFactory(), AccountFactory(), AccountFactory()
+    VolunteerSignup.objects.create(shift=shift, volunteer_account=approved,
+                                   status=SignupStatus.APPROVED)
+    VolunteerSignup.objects.create(shift=shift, volunteer_account=declined,
+                                   status=SignupStatus.DECLINED)
+    VolunteerSignup.objects.create(shift=shift, volunteer_account=cancelled,
+                                   status=SignupStatus.CANCELLED)
+
+    res = client.post(f"{SHIFTS}/{sid}/cancel", **_hdr(owner))
+
+    assert res.status_code == 200
+    assert res.json()["cancelled_signups"] == 1
+    assert VolunteerSignup.objects.get(shift=shift,
+                                       volunteer_account=declined).status == SignupStatus.DECLINED
+    assert VolunteerSignup.objects.get(
+        shift=shift, volunteer_account=cancelled).status == SignupStatus.CANCELLED
+    assert Notification.objects.filter(type="shift_cancelled_by_shelter").count() == 1
 
 
 @pytest.mark.django_db
