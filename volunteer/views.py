@@ -9,8 +9,8 @@ from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for
-from volunteer.serializers import (ShiftCreateSerializer, ShiftPatchSerializer,
-                                   SignupCreateSerializer)
+from volunteer.serializers import (AttendanceSerializer, ShiftCreateSerializer,
+                                   ShiftPatchSerializer, SignupCreateSerializer)
 from volunteer.status import set_signup_status
 
 PAGE_SIZE = 20
@@ -388,3 +388,51 @@ class ShiftRequestsView(APIView):
             "requested_at": su.created_at.isoformat(),
             "reliability": reliability_for(su.volunteer_account),
         } for su in pending]})
+
+
+class SignupCheckView(APIView):
+    """US-V7 · the volunteer checks in and out on the day. Only an approved signup can —
+    a requested or cancelled one has nothing to check into."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, signup_id, action):
+        signup = VolunteerSignup.objects.filter(pk=signup_id).first()
+        if signup is None:
+            return _not_found("signup")
+        if signup.volunteer_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_signup",
+                                       "message": "You can only check into your own shift"}},
+                            status=403)
+        if signup.status != SignupStatus.APPROVED:
+            return Response({"error": {"code": "not_approved",
+                                       "message": "This shift isn't confirmed"}}, status=409)
+        field = "check_in_at" if action == "in" else "check_out_at"
+        setattr(signup, field, timezone.now())
+        signup.save(update_fields=[field, "updated_at"])
+        return Response({field: getattr(signup, field).isoformat()})
+
+
+class SignupAttendanceView(APIView):
+    """US-V7 · after the shift, the shelter records what happened. `no_show` feeds the
+    derived re-approval gate (US-V5), so it cannot be marked before the shift has ended —
+    otherwise a shelter could flag someone for missing a shift still in the future."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        if signup.status != SignupStatus.APPROVED:
+            return Response({"error": {"code": "not_approved",
+                                       "message": "Only a confirmed shift has attendance"}},
+                            status=409)
+        if timezone.now() < signup.shift.ends_at:
+            return Response({"error": {"code": "shift_not_ended",
+                                       "message": "Attendance is recorded after the shift"}},
+                            status=409)
+        s = AttendanceSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        outcome = (SignupStatus.COMPLETED if s.validated_data["outcome"] == "completed"
+                   else SignupStatus.NO_SHOW)
+        set_signup_status(signup, outcome)
+        return Response({"status": outcome})

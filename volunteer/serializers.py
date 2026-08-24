@@ -23,3 +23,7 @@ class SignupCreateSerializer(serializers.Serializer):
     # optional and defaults to declined — a §12.5 exception must be opted INTO.
     waiver_accepted = serializers.BooleanField()
     contact_share_consent = serializers.BooleanField(required=False, default=False)
+
+
+class AttendanceSerializer(serializers.Serializer):
+    outcome = serializers.ChoiceField(choices=["completed", "no_show"])

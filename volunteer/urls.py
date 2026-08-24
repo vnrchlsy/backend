@@ -2,8 +2,8 @@ from django.urls import path
 
 from volunteer.views import (ShelterShiftCancelView, ShelterShiftDetailView, ShelterShiftsView,
                              ShiftDetailView, ShiftRequestsView, ShiftSignupView,
-                             ShiftsBrowseView, SignupApproveView, SignupCancelView,
-                             SignupDeclineView)
+                             ShiftsBrowseView, SignupApproveView, SignupAttendanceView,
+                             SignupCancelView, SignupCheckView, SignupDeclineView)
 
 urlpatterns = [
     path("shelter/shifts", ShelterShiftsView.as_view()),
@@ -12,8 +12,11 @@ urlpatterns = [
     path("shelter/shifts/<uuid:shift_id>/requests", ShiftRequestsView.as_view()),
     path("shelter/signups/<uuid:signup_id>/approve", SignupApproveView.as_view()),
     path("shelter/signups/<uuid:signup_id>/decline", SignupDeclineView.as_view()),
+    path("shelter/signups/<uuid:signup_id>/attendance", SignupAttendanceView.as_view()),
     path("shifts", ShiftsBrowseView.as_view()),
     path("shifts/<uuid:shift_id>", ShiftDetailView.as_view()),
     path("shifts/<uuid:shift_id>/signups", ShiftSignupView.as_view()),
     path("signups/<uuid:signup_id>/cancel", SignupCancelView.as_view()),
+    path("signups/<uuid:signup_id>/check-in", SignupCheckView.as_view(), {"action": "in"}),
+    path("signups/<uuid:signup_id>/check-out", SignupCheckView.as_view(), {"action": "out"}),
 ]
