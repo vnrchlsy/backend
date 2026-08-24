@@ -306,6 +306,52 @@ class SignupDeclineView(APIView):
         return Response({"status": SignupStatus.DECLINED})
 
 
+# Decision 14 · a volunteer cancels FREE up to 12h before the shift; later cancels are still
+# allowed but recorded on their record. Policy number, not a magic constant.
+CANCEL_CUTOFF_HOURS = 12
+
+
+class SignupCancelView(APIView):
+    """US-V6 · a volunteer cancels their own signup.
+
+    ⚠️ Lateness is computed SERVER-side from `cancelled_at` vs `starts_at`. A client cannot
+    be trusted with the free-vs-recorded line, the same posture as the tier-derived document
+    rules and US-V5's disclosure. `was_late` is derived on read, never stored as a flag.
+
+    Cancelling releases capacity, so a `full` shift returns to `open` — under the same row
+    lock the approve path uses, for consistency. `closed` stays terminal.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, signup_id):
+        signup = (VolunteerSignup.objects.select_related("shift")
+                  .filter(pk=signup_id).first())
+        if signup is None:
+            return _not_found("signup")
+        if signup.volunteer_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_signup",
+                                       "message": "You can only cancel your own signup"}},
+                            status=403)
+        if signup.status not in (SignupStatus.REQUESTED, SignupStatus.APPROVED):
+            return Response({"error": {"code": "not_cancellable",
+                                       "message": "This signup can no longer be cancelled"}},
+                            status=409)
+
+        now = timezone.now()
+        cutoff = signup.shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)
+        was_late = now > cutoff
+
+        with transaction.atomic():
+            shift = VolunteerShift.objects.select_for_update().get(pk=signup.shift_id)
+            set_signup_status(signup, SignupStatus.CANCELLED, now=now)
+            if shift.status == ShiftStatus.FULL:
+                approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
+                if approved < shift.capacity:
+                    shift.status = ShiftStatus.OPEN
+                    shift.save(update_fields=["status", "updated_at"])
+        return Response({"status": SignupStatus.CANCELLED, "was_late": was_late})
+
+
 class ShiftRequestsView(APIView):
     """US-V5 · pending requests for one activity, each carrying its derived reliability
     block. ⚠️ Only the four aggregate numbers cross this boundary (D-S5-2) — the payload is
