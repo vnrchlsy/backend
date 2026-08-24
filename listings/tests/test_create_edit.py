@@ -46,13 +46,35 @@ def _tier2_shelter():
     return acc
 
 
-# ── Gate ──────────────────────────────────────────────────────────────────────────
+# ── Gate: creation is IsAuthenticated, NOT verification (decision 2) ────────────
 @pytest.mark.django_db
-def test_an_unverified_account_cannot_create_a_listing(client):
+def test_an_unverified_account_can_still_draft_a_listing(client):
+    """Decision 2 — 'Shelter gating = draft-only, gated-public': an unverified poster
+    may still create a listing, it just never appears in GET /listings until they're
+    verified. Gating creation on verification would have blocked drafting entirely."""
     plain = AccountFactory()
     res = client.post("/api/v1/listings", VALID_BODY, content_type="application/json",
                       **_hdr(plain))
-    assert res.status_code == 403
+    assert res.status_code == 201
+
+
+@pytest.mark.django_db
+def test_an_unverified_posters_draft_stays_out_of_the_public_feed(client):
+    plain = AccountFactory()
+    listing_id = client.post("/api/v1/listings", VALID_BODY, content_type="application/json",
+                             **_hdr(plain)).json()["listing_id"]
+    body = client.get("/api/v1/listings?city=Marikina").json()
+    assert listing_id not in [r["listing_id"] for r in body["results"]]
+
+
+@pytest.mark.django_db
+def test_an_unverified_shelter_can_draft_too(client):
+    unverified_shelter = AccountFactory(account_type="shelter")
+    ShelterProfile.objects.create(account=unverified_shelter, org_name="New Rescue",
+                                  org_type="rescue", tier="community_rescue")
+    res = client.post("/api/v1/listings", VALID_BODY, content_type="application/json",
+                      **_hdr(unverified_shelter))
+    assert res.status_code == 201
 
 
 @pytest.mark.django_db
@@ -142,6 +164,15 @@ def test_the_poster_can_patch_their_own_listing(client):
     listing = AdoptionListing.objects.get(pk=listing_id)
     assert str(listing.adoption_fee) == "450.00"
     assert listing.name == "Bantay"  # untouched fields survive a partial update
+
+
+@pytest.mark.django_db
+def test_an_unverified_poster_can_edit_their_own_draft(client):
+    plain = AccountFactory()
+    listing_id = _create_listing(client, plain)
+    res = client.patch(f"/api/v1/listings/{listing_id}", {"description": "Updated while unverified"},
+                       content_type="application/json", **_hdr(plain))
+    assert res.status_code == 200
 
 
 @pytest.mark.django_db

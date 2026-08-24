@@ -7,7 +7,7 @@ from accounts.models import Address
 from listings.fees import fee_cap_for
 from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
                              AdoptionStage, AdoptionStageKey, StageState)
-from listings.permissions import IsVerifiedMember, IsVerifiedRescuer
+from listings.permissions import IsVerifiedMember
 from listings.serializers import (InquiryCreateSerializer, ListingCreateSerializer,
                                   ListingPatchSerializer, StageUpdateSerializer)
 from listings.stages import set_stage_state
@@ -55,10 +55,17 @@ def _poster_info(account):
 
 
 class ListingsView(APIView):
-    """GET /listings (US-A1b, extended by US-A3) · POST /listings (US-A2)."""
+    """GET /listings (US-A1b, extended by US-A3) · POST /listings (US-A2).
+
+    ⚠️ Creation is gated on `IsAuthenticated`, NOT verification. Decision 2 ("Shelter
+    gating = draft-only, gated-public") — an unverified shelter (or an owner without the
+    Verified Member badge) may still draft a listing; it simply never appears in `GET
+    /listings`, which filters through `public_poster_q()`. Gating creation itself on
+    `IsVerifiedRescuer` would have blocked exactly the drafting flow decision 2 requires —
+    caught while wiring the mobile create form, before it shipped."""
 
     def get_permissions(self):
-        return [AllowAny()] if self.request.method == "GET" else [IsVerifiedRescuer()]
+        return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated()]
 
     def get(self, request):
         qs = (AdoptionListing.objects.filter(status="available")
@@ -95,10 +102,11 @@ class ListingsView(APIView):
 
 
 class ListingDetailView(APIView):
-    """GET /listings/{id} (US-A3, Public) · PATCH /listings/{id} (US-A2, poster-only)."""
+    """GET /listings/{id} (US-A3, Public) · PATCH /listings/{id} (US-A2, poster-only —
+    ownership is the real gate here, not verification; see ListingsView's note)."""
 
     def get_permissions(self):
-        return [AllowAny()] if self.request.method == "GET" else [IsVerifiedRescuer()]
+        return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated()]
 
     def get(self, request, listing_id):
         listing = AdoptionListing.objects.filter(pk=listing_id).first()
