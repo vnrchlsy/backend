@@ -30,3 +30,20 @@ def signed_get_url(file_url, expires_in=SIGNED_URL_TTL):
     key = file_url.split(f"{bucket}/", 1)[-1]
     return boto3.client("s3").generate_presigned_url(
         "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in)
+
+
+def delete_object(file_url):
+    """Delete the stored object backing `file_url` (US-SEC4 retention purge).
+
+    Same dev-stub seam as `signed_get_url`: no bucket configured means no real object
+    ever existed behind the `https://example.invalid/...` placeholder, so this is a
+    no-op today. Once US-D2 wires a real bucket, this is the one place that starts
+    issuing real deletes — `purge_expired_documents` itself doesn't change.
+    """
+    bucket = getattr(settings, "MEDIA_S3_BUCKET", "")
+    if not bucket:
+        return
+    import boto3  # prod-only; not a dev dependency
+
+    key = file_url.split(f"{bucket}/", 1)[-1]
+    boto3.client("s3").delete_object(Bucket=bucket, Key=key)

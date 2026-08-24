@@ -99,6 +99,11 @@ class VerificationDocument(models.Model):
     reviewed_at = models.DateTimeField(null=True, blank=True)
     superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True,
                                       related_name="+")
+    # US-SEC4 · set the moment purge_expired_documents nulls file_url (90 days after the
+    # owning request's terminal decision, RA 10173 data-minimization). The row survives —
+    # only the image goes — so this timestamp is the audit trail's "and here's when it
+    # stopped existing," distinct from uploaded_at/reviewed_at.
+    purged_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "verification_document"

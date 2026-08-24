@@ -136,3 +136,8 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_AGE = 3600  # 1 hour
 OTP_TOTP_ISSUER = "Kupkop PH Admin"
+
+# US-SEC4 · RA 10173 data minimization — decided 2026-08-23: identity documents are kept
+# 90 days after a terminal (approved/rejected) decision, then the file is deleted and
+# verification_document.file_url is nulled; the row itself (and the decision) survives.
+DOCUMENT_RETENTION_DAYS = 90
