@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "shelter",
     "notifications",
     "sagip",
+    "moderation",
 ]
 
 # SecurityMiddleware + CommonMiddleware served the JWT API alone in Sprint 1. The admin
@@ -104,6 +105,7 @@ REST_FRAMEWORK = {
         "signup_ip": "10/hour",
         "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
         "report_create": "20/day", "offer_create": "20/hour",
+        "moderation_flag_create": "20/day",
     },
     "EXCEPTION_HANDLER": "common.errors.error_handler",
 }

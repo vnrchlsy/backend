@@ -83,3 +83,7 @@ class ReportCreateThrottle(AccountScopedThrottle):
 
 class OfferCreateThrottle(AccountScopedThrottle):
     scope = "offer_create"
+
+
+class ModerationFlagCreateThrottle(AccountScopedThrottle):
+    scope = "moderation_flag_create"
