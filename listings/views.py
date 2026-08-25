@@ -70,6 +70,14 @@ class ListingsView(APIView):
         return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated()]
 
     def get(self, request):
+        if request.query_params.get("mine") == "true":
+            if not request.user or not request.user.is_authenticated:
+                return Response({"error": {"code": "auth_required",
+                                           "message": "Log in first"}}, status=401)
+            qs = (AdoptionListing.objects.filter(status="available", posted_by=request.user)
+                  .order_by("-created_at"))
+            page_items, next_page = _paginate(qs, request)
+            return Response({"results": [_card(l) for l in page_items], "next": next_page})
         qs = (AdoptionListing.objects.filter(status="available")
               .filter(public_poster_q()).distinct().order_by("-created_at"))
         city = request.query_params.get("city")

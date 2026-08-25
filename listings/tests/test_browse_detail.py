@@ -6,8 +6,13 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
+from accounts.tokens import tokens_for
 from listings.models import AdoptionListing, AdoptionListingPhoto
 from verifications.models import AccountCapability
+
+
+def _hdr(acc):
+    return {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(acc)['access']}"}
 
 
 def _verified_member(**kw):
@@ -74,6 +79,27 @@ def test_pagination_returns_a_next_page_number_when_more_remain(client):
     ids1 = {r["listing_id"] for r in page1["results"]}
     ids2 = {r["listing_id"] for r in page2["results"]}
     assert ids1.isdisjoint(ids2)
+
+
+# ── mine=true — owner filter for the shelter animal picker (US-V9) ─────────────────
+@pytest.mark.django_db
+def test_mine_true_returns_only_own_available_listings(client):
+    """Ownership is the gate for mine=true — public_poster_q() is skipped, so an
+    unverified poster's own listing still shows in their own picker even though it
+    would be hidden from the public browse feed."""
+    me = AccountFactory(account_type="shelter")
+    other = AccountFactory(account_type="shelter")
+    mine = _listing(me, name="Rex", city="Manila")
+    _listing(other, name="Bo", city="Manila")
+
+    body = client.get("/api/v1/listings?mine=true", **_hdr(me)).json()
+    assert [r["listing_id"] for r in body["results"]] == [str(mine.listing_id)]
+
+
+@pytest.mark.django_db
+def test_mine_true_requires_auth(client):
+    res = client.get("/api/v1/listings?mine=true")
+    assert res.status_code == 401
 
 
 # ── GET /listings/{id} — public detail ───────────────────────────────────────────
