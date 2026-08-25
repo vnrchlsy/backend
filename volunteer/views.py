@@ -73,6 +73,7 @@ class ShelterShiftsView(APIView):
 
     def get(self, request):
         qs = (VolunteerShift.objects.filter(shelter_account=request.user)
+              .select_related("shelter_account")
               .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
         status_filter = request.query_params.get("status")
@@ -88,7 +89,8 @@ class ShelterShiftDetailView(APIView):
     permission_classes = [IsShelter]
 
     def patch(self, request, shift_id):
-        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        shift = (VolunteerShift.objects.filter(pk=shift_id)
+                 .select_related("shelter_account").first())
         if shift is None:
             return _not_found()
         if shift.shelter_account_id != request.user.pk:

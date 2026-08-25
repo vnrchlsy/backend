@@ -67,6 +67,30 @@ def test_list_returns_only_my_own_shifts(client):
 
 
 @pytest.mark.django_db
+def test_list_includes_org_name(client):
+    mine = _shelter()
+    client.post(SHIFTS, _payload(), content_type="application/json", **_hdr(mine))
+    body = client.get(SHIFTS, **_hdr(mine)).json()
+    assert body["results"][0]["org_name"] == mine.display_name
+
+
+@pytest.mark.django_db
+def test_list_query_count_is_bounded_regardless_of_shift_count(
+        client, django_assert_max_num_queries):
+    """Task 4b fix round 1 · `_shift_repr` now reads `shift.shelter_account.display_name`
+    for every row, so this queryset must `select_related("shelter_account")` — otherwise the
+    shelter's own shift list regresses into a per-row N+1. Query count must stay flat as the
+    number of listed shifts grows, same guard as `test_browse_query_count_is_bounded_...`."""
+    mine = _shelter()
+    for _ in range(10):
+        client.post(SHIFTS, _payload(), content_type="application/json", **_hdr(mine))
+    with django_assert_max_num_queries(4):
+        res = client.get(SHIFTS, **_hdr(mine))
+    assert res.status_code == 200
+    assert len(res.json()["results"]) == 10
+
+
+@pytest.mark.django_db
 def test_a_shelter_cannot_edit_another_shelters_shift(client):
     owner = _shelter()
     sid = client.post(SHIFTS, _payload(), content_type="application/json",
