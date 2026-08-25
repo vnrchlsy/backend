@@ -88,6 +88,17 @@ class ShelterShiftDetailView(APIView):
     """US-V2 · edit one activity. `closed` is terminal — never reopened."""
     permission_classes = [IsShelter]
 
+    def get(self, request, shift_id):
+        shift = (VolunteerShift.objects.select_related("shelter_account")
+                 .filter(pk=shift_id).first())
+        if shift is None:
+            return _not_found()
+        if shift.shelter_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_shift",
+                                       "message": "Only the posting shelter can view this"}},
+                            status=403)
+        return Response(_shift_repr(shift))
+
     def patch(self, request, shift_id):
         shift = (VolunteerShift.objects.filter(pk=shift_id)
                  .select_related("shelter_account").first())
@@ -254,6 +265,13 @@ class ShiftSignupView(APIView):
                body=f"{request.user.display_name} wants to join.",
                data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
         return Response({"signup_id": str(signup.pk), "status": signup.status}, status=201)
+
+
+def _contact_repr(account):
+    addr = account.addresses.filter(is_primary=True).first() or account.addresses.first()
+    return {"phone": account.phone, "email": account.email,
+            "address": ({"line1": addr.line1, "barangay": addr.barangay, "city": addr.city,
+                         "province": addr.province} if addr else None)}
 
 
 def _load_signup_for_shelter(signup_id, user):
@@ -426,6 +444,38 @@ class SignupCancelView(APIView):
                     shift.status = ShiftStatus.OPEN
                     shift.save(update_fields=["status", "updated_at"])
         return Response({"status": SignupStatus.CANCELLED, "was_late": was_late})
+
+
+_TERMINAL = {SignupStatus.CANCELLED, SignupStatus.DECLINED}
+
+
+class ShelterSignupVolunteerView(APIView):
+    """US-P0 · the shelter's gated view of one volunteer (for shelter-volunteer-detail).
+
+    Field-level authorization — the contact block is the ONLY sensitive surface and it is
+    withheld unless the volunteer opted in for THIS shift and the signup is still live:
+
+    | field            | when included                                              |
+    |------------------|-----------------------------------------------------------|
+    | display_name     | always (the shelter already sees it on the requests list) |
+    | reliability      | always (aggregate-only, D-S5-2)                            |
+    | contact          | ONLY if contact_share_consent AND status not terminal     |
+
+    `masked_contact` is the platform default; contact-sharing is the documented §12.5
+    exception, so it needs a gate and this view owns it. The key is ABSENT (not null) when
+    withheld — the client renders "not shared", it never receives a null to leak.
+    """
+    permission_classes = [IsShelter]
+
+    def get(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        body = {"display_name": signup.volunteer_account.display_name,
+                "reliability": reliability_for(signup.volunteer_account)}
+        if signup.contact_share_consent and signup.status not in _TERMINAL:
+            body["contact"] = _contact_repr(signup.volunteer_account)
+        return Response(body)
 
 
 class ShiftRequestsView(APIView):
