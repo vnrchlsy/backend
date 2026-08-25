@@ -53,3 +53,12 @@ def test_approve_without_listing_still_works():
     r = _c(shelter).post(f"/api/v1/shelter/signups/{su.pk}/approve", {}, format="json")
     assert r.status_code == 200
     su.refresh_from_db(); assert su.assigned_listing_id is None
+
+
+@pytest.mark.django_db
+def test_approve_rejects_malformed_listing_id():
+    shelter = AccountFactory(account_type="shelter"); su = _walking_signup(shelter)
+    r = _c(shelter).post(f"/api/v1/shelter/signups/{su.pk}/approve",
+                         {"assigned_listing_id": "not-a-uuid"}, format="json")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_listing"
+    su.refresh_from_db(); assert su.status == SignupStatus.REQUESTED    # not approved

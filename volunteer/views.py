@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
@@ -6,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from listings.models import AdoptionListing
 from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
@@ -314,10 +317,15 @@ class SignupApproveView(APIView):
         if error:
             return error
 
-        from listings.models import AdoptionListing            # local import, mirror existing style
         listing_id = request.data.get("assigned_listing_id")
         listing = None
         if listing_id:
+            try:
+                uuid.UUID(str(listing_id))
+            except (ValueError, TypeError):
+                return Response({"error": {"code": "bad_listing",
+                                           "message": "Pick one of your own animals for a walking shift"}},
+                                status=422)
             listing = AdoptionListing.objects.filter(pk=listing_id,
                                                      posted_by=request.user).first()
             if listing is None or signup.shift.type != "walking":
