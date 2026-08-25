@@ -314,6 +314,17 @@ class SignupApproveView(APIView):
         if error:
             return error
 
+        from listings.models import AdoptionListing            # local import, mirror existing style
+        listing_id = request.data.get("assigned_listing_id")
+        listing = None
+        if listing_id:
+            listing = AdoptionListing.objects.filter(pk=listing_id,
+                                                     posted_by=request.user).first()
+            if listing is None or signup.shift.type != "walking":
+                return Response({"error": {"code": "bad_listing",
+                                           "message": "Pick one of your own animals for a walking shift"}},
+                                status=422)
+
         rel = reliability_for(signup.volunteer_account)
         if rel["needs_reapproval"] and request.data.get("acknowledged_reapproval") is not True:
             # Server-enforced, not UI-enforced: a client must not skip the disclosure by
@@ -341,6 +352,9 @@ class SignupApproveView(APIView):
                                 status=409)
 
             set_signup_status(signup, SignupStatus.APPROVED)
+            if listing is not None:
+                signup.assigned_listing = listing
+                signup.save(update_fields=["assigned_listing", "updated_at"])
             if approved + 1 >= shift.capacity and shift.status == ShiftStatus.OPEN:
                 shift.status = ShiftStatus.FULL
                 shift.save(update_fields=["status", "updated_at"])
