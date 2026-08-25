@@ -3,12 +3,12 @@
 No counter column exists and none should be added (consistent with §6.7's
 consecutive-withdrawal rule and the existing "derived from the no_show count" wording).
 
-⚠️ D-S5-2 — aggregate only, in BOTH directions. This returns four integers and two
+⚠️ D-S5-2 — aggregate only, in BOTH directions. This returns three integers and two
 booleans and nothing else: never which shelters, never dates, never a per-org breakdown.
 The count is global across Kupkop; the decision to approve stays each shelter's. The
 volunteer sees the same numbers on their own history.
 """
-from django.db.models import Max
+from django.db.models import Count, Max
 
 from .models import SignupStatus, VolunteerSignup
 
@@ -42,6 +42,10 @@ def reliability_for(account):
         run_qs = run_qs.filter(shift__starts_at__gt=last_completed_at)
     consecutive = run_qs.count()
 
+    return _block(shifts_completed, no_shows, consecutive)
+
+
+def _block(shifts_completed, no_shows, consecutive):
     return {
         "shifts_completed": shifts_completed,
         "no_shows": no_shows,
@@ -49,3 +53,41 @@ def reliability_for(account):
         "needs_reapproval": consecutive >= REAPPROVAL_THRESHOLD,
         "is_reliable": shifts_completed >= RELIABLE_MIN_COMPLETED,
     }
+
+
+def reliability_for_many(accounts):
+    """Batched `reliability_for` for a set of accounts — same block per account, keyed by
+    account pk, in a bounded 2 queries regardless of how many accounts are passed (the
+    requests endpoint's N pending volunteers would otherwise cost ~4N).
+
+    The consecutive run is still measured over the SHIFT's `starts_at` per the invariant in
+    `reliability_for`: no-shows are counted only when they occur after each volunteer's own
+    latest completed shift. An empty `accounts` returns an empty map.
+    """
+    ids = {getattr(a, "pk", a) for a in accounts}
+    if not ids:
+        return {}
+
+    completed = (VolunteerSignup.objects
+                 .filter(volunteer_account_id__in=ids, status=SignupStatus.COMPLETED)
+                 .values("volunteer_account_id")
+                 .annotate(cnt=Count("pk"), last=Max("shift__starts_at")))
+    completed_by = {r["volunteer_account_id"]: r for r in completed}
+
+    # All no-show rows for these accounts, one query; the consecutive run and the total
+    # no-show count are both derived from this list in Python against each account's own
+    # latest completed shift time.
+    no_show_rows = (VolunteerSignup.objects
+                    .filter(volunteer_account_id__in=ids, status=SignupStatus.NO_SHOW)
+                    .values_list("volunteer_account_id", "shift__starts_at"))
+
+    no_shows = {aid: 0 for aid in ids}
+    consecutive = {aid: 0 for aid in ids}
+    for aid, starts_at in no_show_rows:
+        no_shows[aid] += 1
+        last = completed_by.get(aid, {}).get("last")
+        if last is None or starts_at > last:
+            consecutive[aid] += 1
+
+    return {aid: _block(completed_by.get(aid, {}).get("cnt", 0),
+                        no_shows[aid], consecutive[aid]) for aid in ids}

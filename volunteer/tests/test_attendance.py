@@ -1,4 +1,7 @@
+import threading
+
 import pytest
+from django.db import connection
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
@@ -77,3 +80,68 @@ def test_another_shelter_cannot_mark_attendance(client):
                       {"outcome": "completed"}, content_type="application/json",
                       **_hdr(AccountFactory(account_type="shelter")))
     assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_a_non_owner_cannot_check_in_to_someone_elses_signup(client):
+    """Parked-4 · the check-in/out owner-403 path. An authenticated volunteer who is not
+    the owner of the signup must be refused with the domain-specific `not_your_signup`
+    code, not silently allowed to check into another person's shift."""
+    shift, su = _signup()
+    res = client.post(f"/api/v1/signups/{su.pk}/check-in", **_hdr(AccountFactory()))
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "not_your_signup"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_attendance_write_racing_a_late_cancel_cannot_corrupt_the_terminal_state(client):
+    """I-1 · the reason the attendance lock exists. A volunteer may cancel an `approved`
+    signup after the shift has started (cancel gates on status, not time), so the shelter
+    marking attendance and the volunteer cancelling the SAME row can race. Without
+    select_for_update + a re-check under the lock, both pass their `status == APPROVED`
+    check and the last writer wins — a `cancelled` overwritten to `no_show`, or a
+    `completed` clobbered back to `cancelled`. Exactly one side must win: one 200, one 409,
+    and the stored terminal status must match the winner.
+    """
+    for _ in range(3):
+        shift, su = _signup()          # shift already ended, signup APPROVED
+        shelter_hdr = _hdr(shift.shelter_account)
+        volunteer_hdr = _hdr(su.volunteer_account)
+        results = {}
+        barrier = threading.Barrier(2)
+
+        def mark_attendance():
+            try:
+                barrier.wait(timeout=5)
+                r = client.post(f"/api/v1/shelter/signups/{su.pk}/attendance",
+                                {"outcome": "completed"}, content_type="application/json",
+                                **shelter_hdr)
+                results["attendance"] = r.status_code
+            finally:
+                connection.close()  # each thread holds its own DB connection
+
+        def late_cancel():
+            try:
+                barrier.wait(timeout=5)
+                r = client.post(f"/api/v1/signups/{su.pk}/cancel", **volunteer_hdr)
+                results["cancel"] = r.status_code
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=mark_attendance),
+                   threading.Thread(target=late_cancel)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert sorted(results.values()) == [200, 409], \
+            f"expected one win and one 409, got {results}"
+
+        su.refresh_from_db()
+        if results["attendance"] == 200:
+            assert results["cancel"] == 409
+            assert su.status == SignupStatus.COMPLETED
+        else:
+            assert results["cancel"] == 200
+            assert su.status == SignupStatus.CANCELLED

@@ -60,6 +60,21 @@ def test_detail_reports_slots_left(client):
 
 
 @pytest.mark.django_db
+def test_browse_query_count_is_bounded_regardless_of_shift_count(
+        client, django_assert_max_num_queries):
+    """I-2 · `slots_left` comes from an annotation, so the browse listing must NOT run a
+    per-shift COUNT. The query count must stay flat as the number of listed shifts grows."""
+    for _ in range(10):
+        s = _shift(status=ShiftStatus.OPEN, capacity=3)
+        VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
+                                       status=SignupStatus.APPROVED)
+    with django_assert_max_num_queries(4):
+        res = client.get("/api/v1/shifts")
+    assert res.status_code == 200
+    assert len(res.json()["results"]) == 10
+
+
+@pytest.mark.django_db
 def test_request_creates_a_requested_signup_and_notifies_the_shelter(client):
     s = _shift()
     vol = AccountFactory()

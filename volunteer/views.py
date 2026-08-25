@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -8,12 +9,16 @@ from rest_framework.views import APIView
 from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
-from volunteer.reliability import reliability_for
+from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.serializers import (AttendanceSerializer, ShiftCreateSerializer,
                                    ShiftPatchSerializer, SignupCreateSerializer)
 from volunteer.status import set_signup_status
 
 PAGE_SIZE = 20
+
+# Annotates a shift queryset with its approved-signup tally so a list of shifts costs one
+# query instead of a per-row COUNT (the N+1 `_shift_repr` would otherwise incur per page).
+_APPROVED_COUNT = Count("signups", filter=Q(signups__status=SignupStatus.APPROVED))
 
 
 def _not_found(what="shift"):
@@ -46,11 +51,13 @@ class ShelterShiftsView(APIView):
 
     def get(self, request):
         qs = (VolunteerShift.objects.filter(shelter_account=request.user)
+              .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        return Response({"results": [_shift_repr(s) for s in qs[:PAGE_SIZE]],
+        return Response({"results": [_shift_repr(s, approved_count=s.approved_count)
+                                     for s in qs[:PAGE_SIZE]],
                          "next": None})
 
 
@@ -129,11 +136,13 @@ class ShiftsBrowseView(APIView):
         qs = (VolunteerShift.objects
               .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
                       starts_at__gt=timezone.now())
+              .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
         shift_type = request.query_params.get("type")
         if shift_type:
             qs = qs.filter(type=shift_type)
-        return Response({"results": [_shift_repr(s) for s in qs[:PAGE_SIZE]], "next": None})
+        return Response({"results": [_shift_repr(s, approved_count=s.approved_count)
+                                     for s in qs[:PAGE_SIZE]], "next": None})
 
 
 class ShiftDetailView(APIView):
@@ -236,9 +245,11 @@ class SignupApproveView(APIView):
             return error
 
         rel = reliability_for(signup.volunteer_account)
-        if rel["needs_reapproval"] and not request.data.get("acknowledged_reapproval"):
+        if rel["needs_reapproval"] and request.data.get("acknowledged_reapproval") is not True:
             # Server-enforced, not UI-enforced: a client must not skip the disclosure by
-            # omitting it. The shelter may still approve — this is a gate, never a ban.
+            # omitting it — or by sending a non-`true` value. Only a real JSON `true` counts
+            # as acknowledged (a truthy string like "false" must NOT). The shelter may still
+            # approve — this is a gate, never a ban.
             return Response({"error": {"code": "reapproval_required",
                                        "message": "This volunteer has 3 no-shows in a row",
                                        "details": rel}}, status=409)
@@ -380,13 +391,16 @@ class ShiftRequestsView(APIView):
             return Response({"error": {"code": "not_your_shift",
                                        "message": "Only the posting shelter can see these"}},
                             status=403)
-        pending = (shift.signups.filter(status=SignupStatus.REQUESTED)
-                   .select_related("volunteer_account").order_by("created_at"))
+        pending = list(shift.signups.filter(status=SignupStatus.REQUESTED)
+                       .select_related("volunteer_account").order_by("created_at"))
+        # Batch the reliability aggregates for the pending volunteers in a bounded number of
+        # queries instead of ~4 per row. Response shape is unchanged.
+        reliability = reliability_for_many(su.volunteer_account for su in pending)
         return Response({"results": [{
             "signup_id": str(su.pk),
             "volunteer": {"display_name": su.volunteer_account.display_name},
             "requested_at": su.created_at.isoformat(),
-            "reliability": reliability_for(su.volunteer_account),
+            "reliability": reliability[su.volunteer_account_id],
         } for su in pending]})
 
 
@@ -415,7 +429,20 @@ class SignupCheckView(APIView):
 class SignupAttendanceView(APIView):
     """US-V7 · after the shift, the shelter records what happened. `no_show` feeds the
     derived re-approval gate (US-V5), so it cannot be marked before the shift has ended —
-    otherwise a shelter could flag someone for missing a shift still in the future."""
+    otherwise a shelter could flag someone for missing a shift still in the future.
+
+    ⚠️ The `not_approved` status check is re-verified under lock, on a freshly re-fetched
+    signup row — same TOCTOU fix as SignupDeclineView (see its docstring), the one status
+    transition the branch had left unlocked. A volunteer may still cancel an `approved`
+    signup after the shift has started (cancel gates on status, not time), so at the moment
+    the shelter marks attendance the volunteer cancelling the SAME row is a real race:
+    without the lock both sides pass their `status == APPROVED` check and the last writer
+    wins — a `cancelled` signup silently overwritten to `no_show` (unfairly flagged), or a
+    `completed` clobbered back to `cancelled` (losing a completion the reliability gate
+    counts). Locks ONLY the signup row (never the shift): attendance frees no capacity, so
+    it has nothing to recount, and taking no shift lock keeps it deadlock-free against the
+    shift→signup holders, exactly like SignupDeclineView.
+    """
     permission_classes = [IsShelter]
 
     def post(self, request, signup_id):
@@ -434,5 +461,13 @@ class SignupAttendanceView(APIView):
         s.is_valid(raise_exception=True)
         outcome = (SignupStatus.COMPLETED if s.validated_data["outcome"] == "completed"
                    else SignupStatus.NO_SHOW)
-        set_signup_status(signup, outcome)
+
+        with transaction.atomic():
+            signup = (VolunteerSignup.objects.select_for_update()
+                      .get(pk=signup.pk))                # the only lock this view takes
+            if signup.status != SignupStatus.APPROVED:
+                return Response({"error": {"code": "not_approved",
+                                           "message": "Only a confirmed shift has attendance"}},
+                                status=409)
+            set_signup_status(signup, outcome)
         return Response({"status": outcome})

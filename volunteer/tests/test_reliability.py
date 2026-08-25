@@ -131,6 +131,46 @@ def test_approving_a_flagged_volunteer_needs_acknowledgement(client):
 
 
 @pytest.mark.django_db
+def test_a_string_false_acknowledgement_does_not_clear_the_reapproval_gate(client):
+    """M-2 · the gate must accept only a real JSON `true`. A truthy string like "false"
+    read as acknowledged would silently skip the disclosure the shelter is meant to see."""
+    shelter = AccountFactory(account_type="shelter")
+    shift = _shift(shelter=shelter)
+    vol = AccountFactory()
+    _history(vol, [(-5, SignupStatus.NO_SHOW), (-4, SignupStatus.NO_SHOW),
+                   (-3, SignupStatus.NO_SHOW)])
+    su = VolunteerSignup.objects.create(shift=shift, volunteer_account=vol)
+
+    res = client.post(f"/api/v1/shelter/signups/{su.pk}/approve",
+                      {"acknowledged_reapproval": "false"},
+                      content_type="application/json", **_hdr(shelter))
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "reapproval_required"
+    su.refresh_from_db()
+    assert su.status == SignupStatus.REQUESTED     # nothing mutated
+
+
+@pytest.mark.django_db
+def test_requests_endpoint_query_count_is_bounded_regardless_of_pending_volunteers(
+        client, django_assert_max_num_queries):
+    """I-2 · the requests endpoint batches the reliability aggregates. The query count must
+    NOT scale with the number of pending volunteers (the old per-row `reliability_for` was
+    ~4 queries each). Ten pending volunteers, each with no-show history, must stay bounded."""
+    shelter = AccountFactory(account_type="shelter")
+    shift = _shift(shelter=shelter)
+    for _ in range(10):
+        vol = AccountFactory()
+        _history(vol, [(-6, SignupStatus.NO_SHOW), (-5, SignupStatus.COMPLETED)])
+        VolunteerSignup.objects.create(shift=shift, volunteer_account=vol)
+
+    hdr = _hdr(shelter)
+    with django_assert_max_num_queries(12):
+        res = client.get(f"/api/v1/shelter/shifts/{shift.pk}/requests", **hdr)
+    assert res.status_code == 200
+    assert len(res.json()["results"]) == 10
+
+
+@pytest.mark.django_db
 def test_the_requests_payload_leaks_no_other_shelters_identity(client):
     """D-S5-2 · the count is global, the disclosure is not. A shelter sees four integers —
     never which other shelters, when, or a per-org breakdown."""
