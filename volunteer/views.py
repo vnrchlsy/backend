@@ -34,6 +34,27 @@ def _shift_repr(shift, approved_count=None):
             "slots_left": max(shift.capacity - approved_count, 0)}
 
 
+def _my_shift_repr(shift):
+    return {"shift_id": str(shift.pk), "type": shift.type,
+            "org_name": shift.shelter_account.display_name,
+            "starts_at": shift.starts_at.isoformat(), "ends_at": shift.ends_at.isoformat(),
+            "status": shift.status, "capacity": shift.capacity}
+
+
+def _my_item_repr(su, now):
+    late = (su.status == SignupStatus.CANCELLED and su.cancelled_at is not None
+            and su.cancelled_at > su.shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS))
+    hours = None
+    if su.check_in_at and su.check_out_at:
+        hours = round((su.check_out_at - su.check_in_at).total_seconds() / 3600, 1)
+    return {"signup_id": str(su.pk), "status": su.status,
+            "cancelled_at": su.cancelled_at.isoformat() if su.cancelled_at else None,
+            "was_late": late,
+            "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
+            "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
+            "hours": hours, "shift": _my_shift_repr(su.shift)}
+
+
 class ShelterShiftsView(APIView):
     """US-V2 · a shelter posts and lists its own activities."""
     permission_classes = [IsShelter]
@@ -154,6 +175,32 @@ class ShiftDetailView(APIView):
         if shift is None:
             return _not_found()
         return Response(_shift_repr(shift))
+
+
+class MySignupsView(APIView):
+    """US-V8 · the volunteer's own signups — the read surface the schedule/history screens need.
+
+    Read-side derivation, no stored buckets. `was_late` and the reliability block are
+    server-derived (D-S5-2 aggregate-only; never a client clock). Only the caller's own
+    signups are ever returned.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        now = timezone.now()
+        qs = (VolunteerSignup.objects.filter(volunteer_account=request.user)
+              .select_related("shift", "shift__shelter_account").order_by("-shift__starts_at"))
+        requested, upcoming, history = [], [], []
+        for su in qs:
+            item = _my_item_repr(su, now)
+            if su.status == SignupStatus.REQUESTED:
+                requested.append(item)
+            elif su.status == SignupStatus.APPROVED and su.shift.ends_at > now:
+                upcoming.append(item)
+            else:
+                history.append(item)
+        return Response({"requested": requested, "upcoming": upcoming, "history": history,
+                         "reliability": reliability_for(request.user)})
 
 
 class ShiftSignupView(APIView):
