@@ -49,6 +49,17 @@ def test_browse_includes_full_shifts_as_slots_left_zero(client):
     assert str(s.pk) in [r["shift_id"] for r in results]
     full = next(r for r in results if r["shift_id"] == str(s.pk))
     assert full["slots_left"] == 0
+    assert full["org_name"] == s.shelter_account.display_name
+
+
+@pytest.mark.django_db
+def test_browse_list_items_include_org_name(client):
+    """US-V8 (Task 4b) · the shelter's name must ride along on every browse row so the
+    volunteer sees who is asking, matching the approved shift-detail mockup."""
+    s = _shift()
+    results = client.get("/api/v1/shifts").json()["results"]
+    assert len(results) == 1
+    assert results[0]["org_name"] == s.shelter_account.display_name
 
 
 @pytest.mark.django_db
@@ -56,7 +67,9 @@ def test_detail_reports_slots_left(client):
     s = _shift(capacity=3)
     VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
                                    status=SignupStatus.APPROVED)
-    assert client.get(f"/api/v1/shifts/{s.pk}").json()["slots_left"] == 2
+    res = client.get(f"/api/v1/shifts/{s.pk}").json()
+    assert res["slots_left"] == 2
+    assert res["org_name"] == s.shelter_account.display_name
 
 
 @pytest.mark.django_db

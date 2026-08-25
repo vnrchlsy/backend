@@ -29,6 +29,7 @@ def _shift_repr(shift, approved_count=None):
     if approved_count is None:
         approved_count = shift.signups.filter(status=SignupStatus.APPROVED).count()
     return {"shift_id": str(shift.pk), "type": shift.type,
+            "org_name": shift.shelter_account.display_name,
             "starts_at": shift.starts_at.isoformat(), "ends_at": shift.ends_at.isoformat(),
             "capacity": shift.capacity, "status": shift.status,
             "slots_left": max(shift.capacity - approved_count, 0)}
@@ -157,6 +158,7 @@ class ShiftsBrowseView(APIView):
         qs = (VolunteerShift.objects
               .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
                       starts_at__gt=timezone.now())
+              .select_related("shelter_account")
               .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
         shift_type = request.query_params.get("type")
@@ -171,7 +173,8 @@ class ShiftDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, shift_id):
-        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        shift = (VolunteerShift.objects.filter(pk=shift_id)
+                 .select_related("shelter_account").first())
         if shift is None:
             return _not_found()
         return Response(_shift_repr(shift))
