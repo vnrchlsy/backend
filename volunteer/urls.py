@@ -1,7 +1,8 @@
 from django.urls import path
 
 from volunteer.views import (MySignupsView, ShelterShiftCancelView, ShelterShiftDetailView,
-                             ShelterShiftsView, ShelterSignupVolunteerView, ShiftDetailView,
+                             ShelterShiftRosterView, ShelterShiftsView,
+                             ShelterSignupVolunteerView, ShiftDetailView,
                              ShiftRequestsView, ShiftSignupView, ShiftsBrowseView,
                              SignupApproveView, SignupAttendanceView, SignupCancelView,
                              SignupCheckView, SignupDeclineView)
@@ -12,6 +13,7 @@ urlpatterns = [
     path("shelter/shifts/<uuid:shift_id>", ShelterShiftDetailView.as_view()),
     path("shelter/shifts/<uuid:shift_id>/cancel", ShelterShiftCancelView.as_view()),
     path("shelter/shifts/<uuid:shift_id>/requests", ShiftRequestsView.as_view()),
+    path("shelter/shifts/<uuid:shift_id>/roster", ShelterShiftRosterView.as_view()),
     path("shelter/signups/<uuid:signup_id>/approve", SignupApproveView.as_view()),
     path("shelter/signups/<uuid:signup_id>/volunteer", ShelterSignupVolunteerView.as_view()),
     path("shelter/signups/<uuid:signup_id>/decline", SignupDeclineView.as_view()),

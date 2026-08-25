@@ -528,6 +528,35 @@ class ShiftRequestsView(APIView):
         } for su in pending]})
 
 
+_ROSTER_STATUSES = (SignupStatus.APPROVED, SignupStatus.COMPLETED, SignupStatus.NO_SHOW)
+
+
+class ShelterShiftRosterView(APIView):
+    """US-V9 · the shift's attendance-relevant roster — approved signups still to be marked,
+    plus completed/no_show ones already marked, so the mobile attendance screen has one list
+    to render Attended/No-show against. `requested`, `declined`, and `cancelled` are excluded:
+    they are not attendance-relevant."""
+    permission_classes = [IsShelter]
+
+    def get(self, request, shift_id):
+        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        if shift is None:
+            return _not_found()
+        if shift.shelter_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_shift",
+                                       "message": "Only the posting shelter can see this"}},
+                            status=403)
+        signups = (shift.signups.filter(status__in=_ROSTER_STATUSES)
+                   .select_related("volunteer_account").order_by("created_at"))
+        return Response({"results": [{
+            "signup_id": str(su.pk),
+            "volunteer": {"display_name": su.volunteer_account.display_name},
+            "status": su.status,
+            "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
+            "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
+        } for su in signups]})
+
+
 class SignupCheckView(APIView):
     """US-V7 · the volunteer checks in and out on the day. Only an approved signup can —
     a requested or cancelled one has nothing to check into."""
