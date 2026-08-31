@@ -45,3 +45,14 @@ def test_registry_has_no_duplicate_keys_by_construction():
     # preserved every entry (no silent collision) as a documented invariant.
     from notifications.types import _TYPES
     assert len(_TYPES) == len(REGISTRY) == len({t.key for t in _TYPES})
+
+
+def test_every_type_declares_push_and_deep_link():
+    for key, t in REGISTRY.items():
+        assert isinstance(t.push, bool), key
+        assert isinstance(t.deep_link, str), key
+
+
+def test_a_known_type_routes_where_expected():
+    assert REGISTRY["signup_requested"].push is True
+    assert REGISTRY["signup_requested"].deep_link == "kupkop://shelter/shifts/{shift_id}/requests"

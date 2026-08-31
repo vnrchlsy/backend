@@ -22,24 +22,26 @@ class NotificationType:
     # not runtime-validated against the dict a call site actually passes; each call site
     # already builds `data` at the point that has the real values.
     data_shape: str
+    push: bool
+    deep_link: str  # a kupkop:// template keyed on `data`, or "" for no target
 
 
 _TYPES = [
-    NotificationType("verification_approved", "{verification_id, type}"),
-    NotificationType("verification_rejected", "{verification_id, type}"),
-    NotificationType("verification_needs_info", "{verification_id, type}"),
-    NotificationType("report_escalated", "{report_id, escalation_level}"),
-    NotificationType("case_reopened", "{report_id}"),
-    NotificationType("offer_matched", "{report_id, case_id}"),
-    NotificationType("report_claimed", "{report_id, case_id}"),
-    NotificationType("offer_received", "{report_id, offer_id}"),
-    NotificationType("inquiry_received", "{listing_id, inquiry_id}"),
-    NotificationType("stage_advanced", "{inquiry_id, stage_key}"),
-    NotificationType("signup_requested", "{shift_id, signup_id}"),
-    NotificationType("shift_confirmed", "{shift_id, signup_id}"),
-    NotificationType("signup_declined", "{shift_id, signup_id}"),
-    NotificationType("shift_cancelled_by_shelter", "{shift_id}"),
-    NotificationType("shift_reminder", "{shift_id, signup_id, window}"),
+    NotificationType("verification_approved", "{verification_id, type}", True, "kupkop://verifications"),
+    NotificationType("verification_rejected", "{verification_id, type}", True, "kupkop://verifications"),
+    NotificationType("verification_needs_info", "{verification_id, type}", True, "kupkop://verifications"),
+    NotificationType("report_escalated", "{report_id, escalation_level}", True, "kupkop://reports/{report_id}"),
+    NotificationType("case_reopened", "{report_id}", True, "kupkop://reports/{report_id}"),
+    NotificationType("offer_matched", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
+    NotificationType("report_claimed", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
+    NotificationType("offer_received", "{report_id, offer_id}", True, "kupkop://reports/{report_id}"),
+    NotificationType("inquiry_received", "{listing_id, inquiry_id}", True, "kupkop://listings/{listing_id}"),
+    NotificationType("stage_advanced", "{inquiry_id, stage_key}", True, "kupkop://inquiries"),
+    NotificationType("signup_requested", "{shift_id, signup_id}", True, "kupkop://shelter/shifts/{shift_id}/requests"),
+    NotificationType("shift_confirmed", "{shift_id, signup_id}", True, "kupkop://shifts"),
+    NotificationType("signup_declined", "{shift_id, signup_id}", True, "kupkop://shifts/history"),
+    NotificationType("shift_cancelled_by_shelter", "{shift_id}", True, "kupkop://shifts/history"),
+    NotificationType("shift_reminder", "{shift_id, signup_id, window}", True, "kupkop://shifts"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}
