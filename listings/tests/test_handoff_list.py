@@ -53,3 +53,16 @@ def test_list_over_fee_cap_422_no_listing():
     res = _c(r).post(f"/api/v1/cases/{case.pk}/list", {"city": "X", "adoption_fee": "999999"}, format="json")
     assert res.status_code == 422 and res.json()["error"]["code"] == "fee_over_cap"
     assert not AdoptionListing.objects.filter(source_report=case.report).exists()
+
+
+@pytest.mark.django_db
+def test_list_no_city_and_report_city_none_defaults_to_empty_string():
+    # StrayReport.city is nullable and unset here; the caller also omits city.
+    # AdoptionListing.city is non-nullable — must fall back to "", not None (no 500).
+    r = AccountFactory()
+    case = _safe_case(r)
+    assert case.report.city is None
+    res = _c(r).post(f"/api/v1/cases/{case.pk}/list", {"adoption_fee": "0"}, format="json")
+    assert res.status_code == 201
+    listing = AdoptionListing.objects.get(pk=res.json()["listing_id"])
+    assert listing.city == ""

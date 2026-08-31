@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from django.db import IntegrityError, transaction
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -131,7 +133,6 @@ class CaseListView(APIView):
                                        "message": "The animal must be safe before listing"}},
                             status=409)
         fee = request.data.get("adoption_fee") or "0"
-        from decimal import Decimal, InvalidOperation
         try:
             fee_dec = Decimal(str(fee))
         except (InvalidOperation, ValueError):
@@ -143,7 +144,8 @@ class CaseListView(APIView):
                                        "details": {"cap": cap}}}, status=422)
         listing = AdoptionListing.objects.create(
             posted_by=request.user, source_report=case.report, species=case.report.species,
-            name=request.data.get("name") or "", city=request.data.get("city") or case.report.city,
+            name=request.data.get("name") or "",
+            city=request.data.get("city") or case.report.city or "",
             adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
         return Response({"listing_id": str(listing.pk)}, status=201)
 
