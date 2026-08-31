@@ -9,7 +9,7 @@ from accounts.models import Account, Address
 from listings.fees import fee_cap_for
 from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
                              AdoptionStage, AdoptionStageKey, InquiryStatus, ListingStatus,
-                             StageState)
+                             Pet, PetPhoto, StageState)
 from listings.permissions import IsVerifiedMember
 from listings.serializers import (InquiryCreateSerializer, ListingCreateSerializer,
                                   ListingPatchSerializer, StageUpdateSerializer)
@@ -354,3 +354,53 @@ class InquiryStageView(APIView):
               body=f"{stage_key.replace('_', ' ').title()} is now {s.validated_data['state'].replace('_', ' ')}.",
               data={"inquiry_id": str(inquiry.pk), "stage_key": stage_key})
         return Response({"stage_key": stage_key, "state": stage.state})
+
+
+def _load_placement(inquiry_id, user):
+    """Shared guard for PlacementDecisionView: the inquiry must be a direct placement
+    (ALL stages skipped) and the caller must be its recipient — else 403/409."""
+    inq = (AdoptionInquiry.objects.select_related("listing")
+           .filter(pk=inquiry_id).first())
+    if inq is None:
+        return None, Response({"error": {"code": "not_found", "message": "No such inquiry"}},
+                              status=404)
+    if inq.adopter_account_id != user.pk:
+        return None, Response({"error": {"code": "not_your_placement",
+                                         "message": "Only the recipient can decide this"}},
+                              status=403)
+    states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
+    if states != {StageState.SKIPPED}:
+        return None, Response({"error": {"code": "not_a_placement",
+                                         "message": "This isn't a direct placement"}},
+                              status=409)
+    return inq, None
+
+
+class PlacementDecisionView(APIView):
+    """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
+    placement (all stages skipped) accepts or declines it. Accept is the first code
+    path that ever writes a `Pet` row; decline frees the listing back up."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id, action):
+        inq, error = _load_placement(inquiry_id, request.user)
+        if error:
+            return error
+        with transaction.atomic():
+            if action == "accept":
+                inq.status = InquiryStatus.ADOPTED
+                inq.save(update_fields=["status"])
+                inq.listing.status = ListingStatus.ADOPTED
+                inq.listing.save(update_fields=["status"])
+                pet = Pet.objects.create(owner_account=request.user,
+                                         name=inq.listing.name or "Pet",
+                                         species=inq.listing.species)
+                for ph in inq.listing.photos.all():
+                    PetPhoto.objects.create(pet=pet, url=ph.url)
+                return Response({"pet_id": str(pet.pk)}, status=200)
+            # decline
+            inq.status = InquiryStatus.DECLINED
+            inq.save(update_fields=["status"])
+            inq.listing.status = ListingStatus.AVAILABLE
+            inq.listing.save(update_fields=["status"])
+            return Response(status=200)
