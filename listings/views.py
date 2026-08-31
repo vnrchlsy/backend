@@ -356,47 +356,55 @@ class InquiryStageView(APIView):
         return Response({"stage_key": stage_key, "state": stage.state})
 
 
-def _load_placement(inquiry_id, user):
-    """Shared guard for PlacementDecisionView: the inquiry must be a direct placement
-    (ALL stages skipped) and the caller must be its recipient — else 403/409."""
-    inq = (AdoptionInquiry.objects.select_related("listing")
-           .filter(pk=inquiry_id).first())
-    if inq is None:
-        return None, Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                              status=404)
-    if inq.adopter_account_id != user.pk:
-        return None, Response({"error": {"code": "not_your_placement",
-                                         "message": "Only the recipient can decide this"}},
-                              status=403)
-    states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
-    if states != {StageState.SKIPPED}:
-        return None, Response({"error": {"code": "not_a_placement",
-                                         "message": "This isn't a direct placement"}},
-                              status=409)
-    return inq, None
-
-
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
-    path that ever writes a `Pet` row; decline frees the listing back up."""
+    path that ever writes a `Pet` row; decline frees the listing back up.
+
+    The load + guard + mutation all happen inside one `transaction.atomic()` with a
+    `select_for_update()` row lock on the inquiry, and the guard re-checks
+    `inquiry.status == ACTIVE` (not just the stage snapshot, which stays
+    {SKIPPED} forever). Without both of these: a concurrent double-submit could race
+    past the guard before either write lands, and a *sequential* second accept/decline
+    would sail through since 'all stages skipped' + 'you're the adopter' both remain
+    true after the first decision — producing a duplicate Pet, an orphaned Pet
+    (decline-after-accept re-frees a listing whose Pet already exists), or a reversed
+    adoption (decline-then-accept)."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id, action):
-        inq, error = _load_placement(inquiry_id, request.user)
-        if error:
-            return error
         with transaction.atomic():
+            inq = (AdoptionInquiry.objects.select_for_update()
+                   .select_related("listing").filter(pk=inquiry_id).first())
+            if inq is None:
+                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
+                                status=404)
+            if inq.adopter_account_id != request.user.pk:
+                return Response({"error": {"code": "not_your_placement",
+                                           "message": "Only the recipient can decide this"}},
+                                status=403)
+            states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
+            if states != {StageState.SKIPPED}:
+                return Response({"error": {"code": "not_a_placement",
+                                           "message": "This isn't a direct placement"}},
+                                status=409)
+            if inq.status != InquiryStatus.ACTIVE:
+                return Response({"error": {"code": "already_decided",
+                                           "message": "This placement was already decided"}},
+                                status=409)
+
             if action == "accept":
                 inq.status = InquiryStatus.ADOPTED
                 inq.save(update_fields=["status"])
-                inq.listing.status = ListingStatus.ADOPTED
-                inq.listing.save(update_fields=["status"])
                 pet = Pet.objects.create(owner_account=request.user,
                                          name=inq.listing.name or "Pet",
                                          species=inq.listing.species)
                 for ph in inq.listing.photos.all():
-                    PetPhoto.objects.create(pet=pet, url=ph.url)
+                    PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+                inq.listing.status = ListingStatus.ADOPTED
+                inq.listing.adopted_pet = pet
+                inq.listing.adopted_by_account = request.user
+                inq.listing.save(update_fields=["status", "adopted_pet", "adopted_by_account"])
                 return Response({"pet_id": str(pet.pk)}, status=200)
             # decline
             inq.status = InquiryStatus.DECLINED

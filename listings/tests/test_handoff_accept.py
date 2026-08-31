@@ -56,3 +56,36 @@ def test_accept_on_normal_inquiry_409_not_a_placement():
             state=StageState.DONE if key == AdoptionStageKey.INQUIRY else StageState.NOT_STARTED)
     res = _c(adopter).post(f"/api/v1/inquiries/{inq.pk}/accept")
     assert res.status_code == 409 and res.json()["error"]["code"] == "not_a_placement"
+
+
+@pytest.mark.django_db
+def test_second_accept_409_already_decided_no_duplicate_pet():
+    recipient = AccountFactory(); listing, inq = _placement(recipient)
+    first = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/accept")
+    assert first.status_code == 200
+    second = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/accept")
+    assert second.status_code == 409 and second.json()["error"]["code"] == "already_decided"
+    assert Pet.objects.filter(owner_account=recipient).count() == 1
+
+
+@pytest.mark.django_db
+def test_decline_after_accept_409_already_decided():
+    recipient = AccountFactory(); listing, inq = _placement(recipient)
+    first = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/accept")
+    assert first.status_code == 200
+    second = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/decline")
+    assert second.status_code == 409 and second.json()["error"]["code"] == "already_decided"
+    inq.refresh_from_db(); listing.refresh_from_db()
+    assert inq.status == "adopted" and listing.status == "adopted"
+    assert Pet.objects.filter(owner_account=recipient).exists()
+
+
+@pytest.mark.django_db
+def test_accept_links_listing_to_pet_and_recipient():
+    recipient = AccountFactory(); listing, inq = _placement(recipient)
+    res = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/accept")
+    assert res.status_code == 200
+    pet_id = res.json()["pet_id"]
+    listing.refresh_from_db()
+    assert str(listing.adopted_pet_id) == pet_id
+    assert listing.adopted_by_account_id == recipient.pk
