@@ -152,3 +152,9 @@ OTP_TOTP_ISSUER = "Kupkop PH Admin"
 # 90 days after a terminal (approved/rejected) decision, then the file is deleted and
 # verification_document.file_url is nulled; the row itself (and the decision) survives.
 DOCUMENT_RETENTION_DAYS = 90
+
+# US-P2 · FCM push send seam — unset by default (no-op sender, nothing sent). Set both
+# to enable the live FCM HTTP v1 transport in notifications/push.py. Never commit a
+# real credentials path/secret here — supply via environment at deploy time.
+FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
+FCM_CREDENTIALS_PATH = os.environ.get("FCM_CREDENTIALS_PATH", "")
