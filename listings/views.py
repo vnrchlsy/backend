@@ -6,13 +6,14 @@ from rest_framework.views import APIView
 from accounts.models import Address
 from listings.fees import fee_cap_for
 from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
-                             AdoptionStage, AdoptionStageKey, StageState)
+                             AdoptionStage, AdoptionStageKey, ListingStatus, StageState)
 from listings.permissions import IsVerifiedMember
 from listings.serializers import (InquiryCreateSerializer, ListingCreateSerializer,
                                   ListingPatchSerializer, StageUpdateSerializer)
 from listings.stages import set_stage_state
 from listings.visibility import public_poster_q
 from notifications.service import notify
+from sagip.models import RescueCase, StrayStatus
 from shelter.models import ShelterProfile
 
 PAGE_SIZE = 20
@@ -109,6 +110,42 @@ class ListingsView(APIView):
                 AdoptionListingPhoto.objects.create(listing=listing, url=photo["file_url"])
         return Response({"listing_id": str(listing.pk), "listing_status": listing.status},
                         status=201)
+
+
+class CaseListView(APIView):
+    """US-H1 · list an adoption from a SAFE rescue case. The listing carries source_report
+    so provenance survives; the animal's species is inherited from the report. Fee capped
+    by the existing fee_cap_for — no second rule."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        case = RescueCase.objects.select_related("report").filter(pk=case_id).first()
+        if case is None:
+            return Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
+        if case.claimed_by_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_case",
+                                       "message": "Only the claiming rescuer can list this animal"}},
+                            status=403)
+        if case.report.status != StrayStatus.SAFE:
+            return Response({"error": {"code": "case_not_safe",
+                                       "message": "The animal must be safe before listing"}},
+                            status=409)
+        fee = request.data.get("adoption_fee") or "0"
+        from decimal import Decimal, InvalidOperation
+        try:
+            fee_dec = Decimal(str(fee))
+        except (InvalidOperation, ValueError):
+            return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}}, status=422)
+        cap = fee_cap_for(request.user)
+        if cap is not None and fee_dec > cap:
+            return Response({"error": {"code": "fee_over_cap",
+                                       "message": f"The adoption fee can't exceed ₱{cap}",
+                                       "details": {"cap": cap}}}, status=422)
+        listing = AdoptionListing.objects.create(
+            posted_by=request.user, source_report=case.report, species=case.report.species,
+            name=request.data.get("name") or "", city=request.data.get("city") or case.report.city,
+            adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
+        return Response({"listing_id": str(listing.pk)}, status=201)
 
 
 class ListingDetailView(APIView):
