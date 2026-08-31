@@ -327,6 +327,20 @@ class MyInquiriesView(APIView):
         return Response({"results": results, "next": next_page})
 
 
+class MyPetsView(APIView):
+    """GET /me/pets — US-H3. The owner's own pets, each with its first photo if any,
+    for the mobile My-pets tab."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        def _repr(p):
+            ph = p.photos.first() if hasattr(p, "photos") else None
+            return {"pet_id": str(p.pk), "name": p.name, "species": p.species,
+                    "photo_url": (ph.url if ph else None)}
+        pets = request.user.pets.order_by("-pet_id")
+        return Response({"results": [_repr(p) for p in pets]})
+
+
 class InquiryStageView(APIView):
     """POST /inquiries/{id}/stages/{stage_key} — US-A4. Only the listing's poster may
     advance a stage."""
