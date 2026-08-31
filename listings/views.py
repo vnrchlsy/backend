@@ -328,16 +328,18 @@ class MyInquiriesView(APIView):
 
 
 class MyPetsView(APIView):
-    """GET /me/pets — US-H3. The owner's own pets, each with its first photo if any,
-    for the mobile My-pets tab."""
+    """GET /me/pets — US-H3. The owner's own pets, newest first, each with its primary
+    photo (or earliest-uploaded if none is primary) for the mobile My-pets tab."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         def _repr(p):
-            ph = p.photos.first() if hasattr(p, "photos") else None
+            photos = sorted(p.photos.all(), key=lambda ph: ph.uploaded_at)
+            primary = next((ph for ph in photos if ph.is_primary), None)
+            ph = primary or (photos[0] if photos else None)
             return {"pet_id": str(p.pk), "name": p.name, "species": p.species,
                     "photo_url": (ph.url if ph else None)}
-        pets = request.user.pets.order_by("-pet_id")
+        pets = request.user.pets.order_by("-created_at").prefetch_related("photos")
         return Response({"results": [_repr(p) for p in pets]})
 
 
