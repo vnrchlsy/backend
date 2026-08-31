@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "sagip",
     "moderation",
     "volunteer",
+    "devices",
 ]
 
 # SecurityMiddleware + CommonMiddleware served the JWT API alone in Sprint 1. The admin
