@@ -124,6 +124,12 @@ class LogoutView(APIView):
             RefreshToken(request.data["refresh"]).blacklist()
         except Exception:
             pass
+
+        fcm = (request.data.get("fcm_token") or "").strip()
+        if fcm:
+            from devices.models import DeviceToken
+            DeviceToken.objects.filter(account=request.user, fcm_token=fcm).delete()
+
         return Response(status=204)
 
 
@@ -133,6 +139,10 @@ class LogoutAllView(APIView):
     def post(self, request):
         request.user.sessions_revoked_at = timezone.now()
         request.user.save(update_fields=["sessions_revoked_at"])
+
+        from devices.models import DeviceToken
+        DeviceToken.objects.filter(account=request.user).delete()
+
         return Response(status=204)
 
 
