@@ -5,20 +5,39 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Address
+from accounts.models import Account, Address
 from listings.fees import fee_cap_for
 from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
-                             AdoptionStage, AdoptionStageKey, ListingStatus, StageState)
+                             AdoptionStage, AdoptionStageKey, InquiryStatus, ListingStatus,
+                             StageState)
 from listings.permissions import IsVerifiedMember
 from listings.serializers import (InquiryCreateSerializer, ListingCreateSerializer,
                                   ListingPatchSerializer, StageUpdateSerializer)
 from listings.stages import set_stage_state
-from listings.visibility import public_poster_q
+from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
 from sagip.models import RescueCase, StrayStatus
 from shelter.models import ShelterProfile
 
 PAGE_SIZE = 20
+
+
+def _load_safe_own_case(case_id, user):
+    """H1's safe/own-case gate, shared by `CaseListView` and `CasePlaceView`: the case
+    must exist, be claimed by the requesting user, and its report must be SAFE. Returns
+    (case, None) on success or (None, Response) with the appropriate error status."""
+    case = RescueCase.objects.select_related("report").filter(pk=case_id).first()
+    if case is None:
+        return None, Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
+    if case.claimed_by_account_id != user.pk:
+        return None, Response({"error": {"code": "not_your_case",
+                                         "message": "Only the claiming rescuer can list this animal"}},
+                              status=403)
+    if case.report.status != StrayStatus.SAFE:
+        return None, Response({"error": {"code": "case_not_safe",
+                                         "message": "The animal must be safe before listing"}},
+                              status=409)
+    return case, None
 
 
 def _paginate(qs, request):
@@ -121,17 +140,9 @@ class CaseListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, case_id):
-        case = RescueCase.objects.select_related("report").filter(pk=case_id).first()
-        if case is None:
-            return Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
-        if case.claimed_by_account_id != request.user.pk:
-            return Response({"error": {"code": "not_your_case",
-                                       "message": "Only the claiming rescuer can list this animal"}},
-                            status=403)
-        if case.report.status != StrayStatus.SAFE:
-            return Response({"error": {"code": "case_not_safe",
-                                       "message": "The animal must be safe before listing"}},
-                            status=409)
+        case, error = _load_safe_own_case(case_id, request.user)
+        if error:
+            return error
         fee = request.data.get("adoption_fee") or "0"
         try:
             fee_dec = Decimal(str(fee))
@@ -148,6 +159,51 @@ class CaseListView(APIView):
             city=request.data.get("city") or case.report.city or "",
             adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
         return Response({"listing_id": str(listing.pk)}, status=201)
+
+
+class CasePlaceView(APIView):
+    """US-H2 · direct placement to a verified recipient — the rescuer hands a SAFE
+    case's animal straight to a known Verified Member or shelter, bypassing the public
+    inquiry flow. Reuses H1's safe/own-case gate. Every stage is created then immediately
+    moved to SKIPPED (the placement bypass — US-H3 keys off "all stages skipped")."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        case, error = _load_safe_own_case(case_id, request.user)
+        if error:
+            return error
+        recipient = Account.objects.filter(email=request.data.get("recipient_email")).first()
+        if recipient is None:
+            return Response({"error": {"code": "recipient_not_found", "message": "No such account"}}, status=404)
+        if not account_is_verified_rescuer(recipient):
+            return Response({"error": {"code": "recipient_not_verified",
+                                       "message": "The recipient must be a verified member or shelter"}},
+                            status=422)
+        fee = request.data.get("adoption_fee") or "0"
+        try:
+            fee_dec = Decimal(str(fee))
+        except (InvalidOperation, ValueError):
+            return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}}, status=422)
+        cap = fee_cap_for(request.user)
+        if cap is not None and fee_dec > cap:
+            return Response({"error": {"code": "fee_over_cap",
+                                       "message": f"The adoption fee can't exceed ₱{cap}",
+                                       "details": {"cap": cap}}}, status=422)
+        with transaction.atomic():
+            listing = AdoptionListing.objects.create(
+                posted_by=request.user, source_report=case.report, species=case.report.species,
+                name=request.data.get("name") or "",
+                city=request.data.get("city") or case.report.city or "",
+                adoption_fee=fee_dec, status=ListingStatus.PENDING)
+            inquiry = AdoptionInquiry.objects.create(listing=listing, adopter_account=recipient,
+                                                     status=InquiryStatus.ACTIVE)
+            for key in AdoptionStageKey:
+                stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
+                set_stage_state(stage, StageState.SKIPPED, request.user, note="direct placement")
+            notify(recipient, "inquiry_received", title="You've been offered a pet",
+                  body=f"{request.user.display_name} wants to place an animal with you.",
+                  data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
+        return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
 
 
 class ListingDetailView(APIView):

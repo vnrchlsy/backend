@@ -1,6 +1,6 @@
 from django.urls import path
 
-from listings.views import (CaseListView, InquiryStageView, ListingDetailView,
+from listings.views import (CaseListView, CasePlaceView, InquiryStageView, ListingDetailView,
                             ListingInquiriesView, ListingsView, MyInquiriesView)
 
 urlpatterns = [
@@ -10,4 +10,5 @@ urlpatterns = [
     path("me/inquiries", MyInquiriesView.as_view()),
     path("inquiries/<uuid:inquiry_id>/stages/<str:stage_key>", InquiryStageView.as_view()),
     path("cases/<uuid:case_id>/list", CaseListView.as_view()),
+    path("cases/<uuid:case_id>/place", CasePlaceView.as_view()),
 ]
