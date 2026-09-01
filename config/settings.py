@@ -158,3 +158,9 @@ DOCUMENT_RETENTION_DAYS = 90
 # real credentials path/secret here — supply via environment at deploy time.
 FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
 FCM_CREDENTIALS_PATH = os.environ.get("FCM_CREDENTIALS_PATH", "")
+
+# US-D2 · S3 media storage seam — two buckets by visibility (see common/storage.py).
+# Unset by default (dev stub; no real object is stored or signed). Set both to activate
+# the live boto3 path. Never commit bucket names that contain account IDs to VCS.
+MEDIA_S3_BUCKET_PUBLIC = os.environ.get("MEDIA_S3_BUCKET_PUBLIC", "")
+MEDIA_S3_BUCKET_RESTRICTED = os.environ.get("MEDIA_S3_BUCKET_RESTRICTED", "")

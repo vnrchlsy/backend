@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "S3 lifecycle policy for the RESTRICTED bucket (MEDIA_S3_BUCKET_RESTRICTED).",
+    "Apply with:",
+    "  aws s3api put-bucket-lifecycle-configuration \\",
+    "    --bucket <RESTRICTED_BUCKET_NAME> \\",
+    "    --lifecycle-configuration file://s3-lifecycle.json",
+    "",
+    "Purpose: hard backstop for RA 10173 §11 data minimization (US-SEC4).",
+    "The purge_expired_documents management command (run nightly via cron) is the",
+    "primary enforcer — it deletes the S3 object AND nulls verification_document.file_url",
+    "90 days after a terminal verification decision (DOCUMENT_RETENTION_DAYS = 90).",
+    "This lifecycle rule is a safety net for the case where the cron never ran.",
+    "180 days = 90-day retention + 90-day cron-failure buffer.",
+    "",
+    "Do NOT apply this policy to the PUBLIC bucket — photo CDN objects have no",
+    "mandatory deletion schedule."
+  ],
+  "Rules": [
+    {
+      "ID": "verification-doc-expiry",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 180
+      }
+    }
+  ]
+}
