@@ -166,6 +166,9 @@ class AdoptionInquiry(models.Model):
     status = models.CharField(max_length=20, choices=InquiryStatus.choices,
                               default=InquiryStatus.ACTIVE)
     notes = models.TextField(blank=True)
+    # Set when status leaves ACTIVE (adopted/declined/withdrawn). The consecutive-withdrawal
+    # rule must order by decision time, not updated_at which is overwritten on any edit.
+    decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

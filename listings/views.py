@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -409,9 +410,11 @@ class PlacementDecisionView(APIView):
                                            "message": "This placement was already decided"}},
                                 status=409)
 
+            now = timezone.now()
             if action == "accept":
                 inq.status = InquiryStatus.ADOPTED
-                inq.save(update_fields=["status"])
+                inq.decided_at = now
+                inq.save(update_fields=["status", "decided_at"])
                 pet = Pet.objects.create(owner_account=request.user,
                                          name=inq.listing.name or "Pet",
                                          species=inq.listing.species)
@@ -424,7 +427,8 @@ class PlacementDecisionView(APIView):
                 return Response({"pet_id": str(pet.pk)}, status=200)
             # decline
             inq.status = InquiryStatus.DECLINED
-            inq.save(update_fields=["status"])
+            inq.decided_at = now
+            inq.save(update_fields=["status", "decided_at"])
             inq.listing.status = ListingStatus.AVAILABLE
             inq.listing.save(update_fields=["status"])
             return Response(status=200)
