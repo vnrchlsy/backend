@@ -10,7 +10,19 @@ import pathlib
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]  # repo root
+ROOT = pathlib.Path(__file__).resolve().parents[3]  # the docs workspace, one level above backend/
+SPEC = ROOT / "KupkopPH-Technical-Spec.html"
+CHECKDOCS = ROOT / "dev" / "check-docs.py"
+
+# The Tech Spec and check-docs.py live in a SEPARATE repository. In a backend-only
+# checkout — which is what CI clones — neither file is present, and this cross-repo
+# guard has nothing to compare against. Skip rather than fail: a missing sibling repo
+# is not a parity violation. `dev/check-docs.py::check_notification_matrix` enforces
+# the same invariant from the docs side whenever backend/ is checked out alongside.
+pytestmark = pytest.mark.skipif(
+    not (SPEC.exists() and CHECKDOCS.exists()),
+    reason="docs repo not checked out alongside backend/ — §14 parity runs in the docs workspace",
+)
 
 
 def _load_checkdocs():
