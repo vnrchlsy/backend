@@ -263,6 +263,26 @@ TEST_DATABASE_NAME=kupkop_test
 
 ---
 
+## Scheduled tasks
+
+Two management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
+
+| Command | Frequency | Purpose |
+|---|---|---|
+| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders (US-F0/E1/E2/N2/V7) |
+| `purge_expired_documents` | Nightly 02:00 UTC | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
+
+Quick-start (development):
+
+```bash
+.venv/bin/python manage.py run_sweeps
+.venv/bin/python manage.py purge_expired_documents
+```
+
+The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Both commands are idempotent — safe to run more frequently than scheduled during testing.
+
+---
+
 ## Deferred & stubbed
 
 These are intentional for the Sprint-1 slice — implemented as clean stubs or seams, not gaps:

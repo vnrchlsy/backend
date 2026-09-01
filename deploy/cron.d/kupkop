@@ -1,0 +1,16 @@
+# Kupkop PH — backend scheduled tasks
+# Drop this file into /etc/cron.d/ (or install via your config-management tool).
+# Replace <BACKEND_DIR> with the absolute path to the backend/ directory (e.g. /srv/kupkop/backend).
+# Replace <USER> with the OS user that owns the process (e.g. www-data or kupkop).
+# All times are UTC; Django settings default to UTC (Philippines = UTC+8).
+
+MAILTO=""
+SHELL=/bin/bash
+
+# Hourly sweeps: stray escalation, stalled claims, expired offers, shift reminders (US-F0/E1/E2/N2/V7)
+0 * * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_sweeps >> /var/log/kupkop/sweeps.log 2>&1
+
+# Nightly document retention purge — RA 10173 data minimization (US-SEC4)
+# Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
+# 02:00 UTC = 10:00 PHT; low-traffic window.
+0 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
