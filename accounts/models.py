@@ -1,0 +1,143 @@
+import uuid
+
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import models, transaction
+
+
+class CICharField(models.CharField):
+    """Case-insensitive char backed by the Postgres `citext` type (matches
+    kupkop_mvp_schema.sql). Django 5.1 removed contrib.postgres CICharField;
+    this maps the column to citext so uniqueness/compares are case-insensitive
+    while the stored case is preserved. Requires the citext extension migration."""
+
+    def db_type(self, connection):
+        return "citext"
+
+
+class AccountType(models.TextChoices):
+    PERSONAL = "personal"
+    SHELTER = "shelter"
+    ADMIN = "admin"
+
+
+class AccountStatus(models.TextChoices):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
+class AccountManager(models.Manager):
+    def create_account(self, *, account_type, email, display_name, password=None,
+                       terms_consent_version=None, **extra):
+        # RA 10173: the controller must be able to DEMONSTRATE consent, so creating an
+        # account always stamps it — signing up *is* the consent the screen describes.
+        # Stamped here rather than in the view so every creation path (email signup,
+        # social signup) records it and none can quietly forget.
+        from django.conf import settings as dj_settings
+        from django.utils import timezone
+        with transaction.atomic():
+            account = self.model(account_type=account_type, email=email,
+                                 display_name=display_name, **extra)
+            if password:
+                account.set_password(password)
+            account.terms_consent_at = timezone.now()
+            account.terms_consent_version = (
+                terms_consent_version or getattr(dj_settings, "TERMS_VERSION", ""))
+            account.save(using=self._db)
+            AccountSettings.objects.create(account=account)
+        return account
+
+
+class Account(models.Model):
+    account_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account_type = models.CharField(max_length=20, choices=AccountType.choices)
+    email = CICharField(max_length=254, unique=True)
+    phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
+    phone_verified_at = models.DateTimeField(null=True, blank=True)
+    password_hash = models.TextField(blank=True)          # NULL/"" for social-only
+    display_name = models.CharField(max_length=100)
+    photo_url = models.TextField(blank=True)
+    # Signup Terms/Privacy consent (RA 10173). Distinct from
+    # verification_request.consent_at/.consent_version, which cover the separate
+    # purpose-specific consent to collect identity DOCUMENTS (§12.6) — never merge them.
+    # Nullable: accounts predating this column have no value and must not be backfilled.
+    terms_consent_at = models.DateTimeField(null=True, blank=True)
+    terms_consent_version = models.CharField(max_length=20, blank=True)
+    # date_of_birth intentionally omitted (RA 10173 minimization — see plan Global Constraints)
+    two_factor_enabled = models.BooleanField(default=False)
+    sessions_revoked_at = models.DateTimeField(null=True, blank=True)  # logout-all / password reset set this; tokens with iat before it are rejected
+    status = models.CharField(max_length=20, choices=AccountStatus.choices,
+                              default=AccountStatus.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = AccountManager()
+
+    USERNAME_FIELD = "email"
+    is_active = True            # required by SimpleJWT/auth contracts
+
+    class Meta:
+        db_table = "account"
+
+    def set_password(self, raw):
+        self.password_hash = make_password(raw)
+
+    def check_password(self, raw):
+        return bool(self.password_hash) and check_password(raw, self.password_hash)
+
+    @property
+    def is_authenticated(self):
+        return True
+
+
+class AccountSettings(models.Model):
+    settings_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.OneToOneField(Account, on_delete=models.CASCADE, related_name="settings")
+    marketing_emails = models.BooleanField(default=False)
+    approximate_location = models.BooleanField(default=True)
+    masked_contact = models.BooleanField(default=True)
+    push_enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "account_settings"
+
+
+class AuthProvider(models.TextChoices):
+    GOOGLE = "google"
+    FACEBOOK = "facebook"
+    APPLE = "apple"
+
+
+class AccountIdentity(models.Model):
+    identity_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="identities")
+    provider = models.CharField(max_length=10, choices=AuthProvider.choices)
+    provider_user_id = models.CharField(max_length=255)
+    email = CICharField(max_length=254, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "account_identity"
+        constraints = [
+            models.UniqueConstraint(fields=["provider", "provider_user_id"],
+                                    name="uq_provider_sub"),
+            models.UniqueConstraint(fields=["account", "provider"], name="uq_account_provider"),
+        ]
+
+
+class Address(models.Model):
+    address_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="addresses")
+    label = models.CharField(max_length=40, blank=True)
+    line1 = models.TextField(blank=True)
+    barangay = models.CharField(max_length=80, blank=True)
+    city = models.CharField(max_length=80)
+    province = models.CharField(max_length=80, blank=True)
+    postal_code = models.CharField(max_length=10, blank=True)
+    geom = models.TextField(null=True, blank=True)   # PostGIS geography in prod; NULL for persons
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "address"
