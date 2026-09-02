@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from notifications.service import notify
 from shelter.permissions import IsShelter
 
 from .models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
@@ -63,6 +64,9 @@ class NeedPledgesView(APIView):
         s.is_valid(raise_exception=True)
         pledge = NeedPledge.objects.create(need=need, pledger_account=request.user,
                                            quantity=s.validated_data["quantity"])
+        notify(need.shelter_account, "pledge_received",
+               title="New pledge", body=f"Someone pledged to “{need.title}”.",
+               data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
         return Response({"pledge_id": str(pledge.pk)}, status=201)
 
 
@@ -102,4 +106,7 @@ class NeedReceivedView(APIView):
             need = apply_received(need.pk, pledge, s.validated_data["quantity_received"])
         except NeedError as e:
             return _err(str(e), "This pledge has already been decided.", 409)
+        notify(pledge.pledger_account, "pledge_confirmed",
+               title="Pledge received", body=f"“{need.title}” confirmed your pledge. Salamat!",
+               data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
         return Response({"need_status": need.status})

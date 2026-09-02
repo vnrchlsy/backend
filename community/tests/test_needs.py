@@ -12,6 +12,7 @@ from django.db import connection
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from notifications.models import Notification
 
 
 def _hdr(acc):
@@ -89,6 +90,9 @@ def test_pledge_on_an_open_need(client):
     # D-S6-7: pledging does NOT touch quantity_received.
     need.refresh_from_db()
     assert need.quantity_received == 0
+    # the shelter is told a pledge came in (D-S6-5)
+    assert Notification.objects.filter(account=need.shelter_account,
+                                       type="pledge_received").count() == 1
 
 
 @pytest.mark.django_db
@@ -154,6 +158,9 @@ def test_received_confirm_marks_delivered_and_grows_received(client):
     p.refresh_from_db(); need.refresh_from_db()
     assert p.status == PledgeStatus.DELIVERED
     assert need.quantity_received == 2 and need.status == NeedStatus.OPEN
+    # the pledger is told their pledge was confirmed received (D-S6-5)
+    assert Notification.objects.filter(account=p.pledger_account,
+                                       type="pledge_confirmed").count() == 1
 
 
 @pytest.mark.django_db
