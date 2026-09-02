@@ -186,6 +186,18 @@ def test_another_shelter_cannot_confirm_received(client):
     assert res.status_code == 403
 
 
+@pytest.mark.django_db
+def test_my_pledges_lists_the_givers_own_pledges(client):
+    giver = AccountFactory()
+    mine = _pledge(_need(), pledger=giver, quantity=3)
+    _pledge(_need())   # someone else's pledge
+    res = client.get("/api/v1/me/pledges", **_hdr(giver))
+    assert res.status_code == 200
+    rows = res.json()["results"]
+    assert len(rows) == 1 and rows[0]["pledge_id"] == str(mine.pk)
+    assert rows[0]["need"]["shelter_name"] and rows[0]["quantity"] == 3
+
+
 @pytest.mark.django_db(transaction=True)
 def test_two_concurrent_received_confirms_sum_correctly():
     """The lock is real: two staff confirming different pledges at once must both land,

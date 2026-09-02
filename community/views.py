@@ -89,6 +89,22 @@ class PledgeCancelView(APIView):
         return Response({"status": pledge.status})
 
 
+class MyPledgesView(APIView):
+    """US-W2 · the giver's own pledges (My Donations): pledged / delivered / cancelled."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (NeedPledge.objects.filter(pledger_account=request.user)
+              .select_related("need", "need__shelter_account").order_by("-created_at")[:PAGE_SIZE])
+        return Response({"results": [
+            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
+             "created_at": p.created_at.isoformat(),
+             "need": {"need_id": str(p.need_id), "title": p.need.title,
+                      "category": p.need.category,
+                      "shelter_name": p.need.shelter_account.display_name}}
+            for p in qs]})
+
+
 class NeedReceivedView(APIView):
     """POST: the shelter confirms it received a pledge, entering the actual quantity."""
     permission_classes = [IsShelter]

@@ -1,11 +1,12 @@
 from django.urls import path
 
-from community.views import (MeImpactView, NeedPledgesView, NeedReceivedView,
+from community.views import (MeImpactView, MyPledgesView, NeedPledgesView, NeedReceivedView,
                              PledgeCancelView, ShelterNeedsView, StoriesView,
                              StoryDetailView, StoryReactionView)
 
 urlpatterns = [
     path("me/impact", MeImpactView.as_view()),
+    path("me/pledges", MyPledgesView.as_view()),
     path("shelters/<uuid:account_id>/needs", ShelterNeedsView.as_view()),
     path("needs/<uuid:need_id>/pledges", NeedPledgesView.as_view()),
     path("needs/<uuid:need_id>/received", NeedReceivedView.as_view()),
