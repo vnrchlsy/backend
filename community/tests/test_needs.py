@@ -187,6 +187,62 @@ def test_another_shelter_cannot_confirm_received(client):
 
 
 @pytest.mark.django_db
+def test_shelter_edits_an_open_need(client):
+    need = _need(needed=5)
+    res = client.patch(f"/api/v1/needs/{need.pk}", {"title": "Kibble (large bag)",
+                                                    "quantity_needed": 8},
+                       content_type="application/json", **_hdr(need.shelter_account))
+    assert res.status_code == 200
+    need.refresh_from_db()
+    assert need.title == "Kibble (large bag)" and need.quantity_needed == 8
+
+
+@pytest.mark.django_db
+def test_shelter_closes_a_need(client):
+    need = _need()
+    res = client.patch(f"/api/v1/needs/{need.pk}", {"status": "closed"},
+                       content_type="application/json", **_hdr(need.shelter_account))
+    assert res.status_code == 200
+    need.refresh_from_db()
+    assert need.status == NeedStatus.CLOSED
+
+
+@pytest.mark.django_db
+def test_editing_a_closed_need_is_409(client):
+    need = _need(status=NeedStatus.CLOSED)
+    res = client.patch(f"/api/v1/needs/{need.pk}", {"title": "x"},
+                       content_type="application/json", **_hdr(need.shelter_account))
+    assert res.status_code == 409 and res.json()["error"]["code"] == "need_not_open"
+
+
+@pytest.mark.django_db
+def test_another_shelter_cannot_edit_a_need(client):
+    need = _need()
+    res = client.patch(f"/api/v1/needs/{need.pk}", {"title": "x"},
+                       content_type="application/json", **_hdr(_shelter()))
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_shelter_lists_a_needs_pledges(client):
+    need = _need()
+    _pledge(need, quantity=2)
+    _pledge(need, quantity=1)
+    res = client.get(f"/api/v1/needs/{need.pk}/pledges", **_hdr(need.shelter_account))
+    assert res.status_code == 200
+    rows = res.json()["results"]
+    assert len(rows) == 2 and all("pledger_name" in r for r in rows)
+
+
+@pytest.mark.django_db
+def test_another_shelter_cannot_list_pledges(client):
+    need = _need()
+    _pledge(need)
+    res = client.get(f"/api/v1/needs/{need.pk}/pledges", **_hdr(_shelter()))
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
 def test_my_pledges_lists_the_givers_own_pledges(client):
     giver = AccountFactory()
     mine = _pledge(_need(), pledger=giver, quantity=3)

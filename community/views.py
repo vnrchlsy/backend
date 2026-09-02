@@ -14,7 +14,8 @@ from shelter.permissions import IsShelter
 from .badges import impact_counts
 from .models import AccountBadge, NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
 from .needs import NeedError, apply_received
-from .serializers import NeedCreateSerializer, PledgeCreateSerializer, ReceivedSerializer
+from .serializers import (NeedCreateSerializer, NeedPatchSerializer, PledgeCreateSerializer,
+                          ReceivedSerializer)
 
 PAGE_SIZE = 20
 
@@ -52,9 +53,49 @@ class ShelterNeedsView(APIView):
         return Response({"need_id": str(need.pk)}, status=201)
 
 
+class NeedDetailView(APIView):
+    """US-W3 · the owning shelter edits a need (while open) or closes it."""
+    permission_classes = [IsShelter]
+
+    def patch(self, request, need_id):
+        need = ShelterNeed.objects.filter(pk=need_id).first()
+        if need is None:
+            return _err("not_found", "No such need.", 404)
+        if need.shelter_account_id != request.user.pk:
+            return _err("forbidden", "Only the owning shelter can edit this need.", 403)
+        s = NeedPatchSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        if d.get("status") == NeedStatus.CLOSED:
+            need.status = NeedStatus.CLOSED
+            need.save(update_fields=["status"])
+            return Response(_need_repr(need))
+        if need.status != NeedStatus.OPEN:
+            return _err("need_not_open", "Only an open need can be edited.", 409)
+        for f in ("title", "description", "quantity_needed"):
+            if f in d:
+                setattr(need, f, d[f])
+        need.save()
+        return Response(_need_repr(need))
+
+
 class NeedPledgesView(APIView):
-    """POST a pledge against an open need (any authenticated user)."""
-    permission_classes = [IsAuthenticated]
+    """POST a pledge against an open need (any user); GET the need's pledges (owning shelter)."""
+
+    def get_permissions(self):
+        return [IsShelter()] if self.request.method == "GET" else [IsAuthenticated()]
+
+    def get(self, request, need_id):
+        need = ShelterNeed.objects.filter(pk=need_id).first()
+        if need is None:
+            return _err("not_found", "No such need.", 404)
+        if need.shelter_account_id != request.user.pk:
+            return _err("forbidden", "Only the owning shelter can see these pledges.", 403)
+        pledges = (need.pledges.select_related("pledger_account").order_by("-created_at"))
+        return Response({"results": [
+            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
+             "pledger_name": p.pledger_account.display_name,
+             "created_at": p.created_at.isoformat()} for p in pledges]})
 
     def post(self, request, need_id):
         need = ShelterNeed.objects.filter(pk=need_id).first()
