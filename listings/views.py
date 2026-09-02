@@ -424,6 +424,10 @@ class PlacementDecisionView(APIView):
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user
                 inq.listing.save(update_fields=["status", "adopted_pet", "adopted_by_account"])
+                # US-B1 · rehoming a pet can earn a badge for the lister (idempotent +
+                # reconciled nightly; deferred import avoids a cycle).
+                from community.badges import award_badges_for
+                award_badges_for(inq.listing.posted_by)
                 return Response({"pet_id": str(pet.pk)}, status=200)
             # decline
             inq.status = InquiryStatus.DECLINED

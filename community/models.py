@@ -91,3 +91,41 @@ class NeedPledge(models.Model):
             models.CheckConstraint(condition=models.Q(quantity__gte=1),
                                    name="need_pledge_quantity_min1"),
         ]
+
+
+class Badge(models.Model):
+    """The badge catalog (kupkop_mvp_schema.sql `badge`). Seeded, not user-created.
+
+    `badge_code` is the natural primary key. Criteria are shift-agnostic (D-S6-2): any
+    completed Kawang-Gawa shift counts, not walks only.
+    """
+
+    badge_code = models.CharField(max_length=40, primary_key=True)
+    name = models.TextField()
+    description = models.TextField(blank=True)
+    icon = models.TextField(blank=True)
+    criteria = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "badge"
+
+
+class AccountBadge(models.Model):
+    """One earned badge (`account_badge`). Awarding is an idempotent insert — the composite
+    identity absorbs replays, so `award_badges_for` can run at an event AND in the nightly
+    catch-up sweep (D-S6-3) without double-awarding.
+
+    The DDL's PRIMARY KEY (account_id, badge_code) is enforced here as a UNIQUE constraint over
+    Django's implicit surrogate key: Django 5.1 has no composite primary key (added in 5.2).
+    Revisit as a real composite PK on the 5.2 upgrade; the uniqueness invariant is identical.
+    """
+
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="badges")
+    badge = models.ForeignKey(Badge, on_delete=models.PROTECT, related_name="+")
+    earned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "account_badge"
+        constraints = [
+            models.UniqueConstraint(fields=["account", "badge"], name="uq_account_badge"),
+        ]

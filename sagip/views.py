@@ -167,6 +167,11 @@ class CaseStatusView(APIView):
                 case.resolved_at = timezone.now()
                 case.save(update_fields=["outcome_notes", "outcome_photo_url", "resolved_at"])
 
+        if target == StrayStatus.RESOLVED:
+            # US-B1 · a resolved rescue can earn a badge (idempotent + reconciled nightly).
+            from community.badges import award_badges_for
+            award_badges_for(case.claimed_by_account)
+
         return Response({"status": target}, status=200)
 
 

@@ -10,7 +10,8 @@ from rest_framework.views import APIView
 from notifications.service import notify
 from shelter.permissions import IsShelter
 
-from .models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from .badges import impact_counts
+from .models import AccountBadge, NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
 from .needs import NeedError, apply_received
 from .serializers import NeedCreateSerializer, PledgeCreateSerializer, ReceivedSerializer
 
@@ -110,3 +111,20 @@ class NeedReceivedView(APIView):
                title="Pledge received", body=f"“{need.title}” confirmed your pledge. Salamat!",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
         return Response({"need_status": need.status})
+
+
+class MeImpactView(APIView):
+    """US-B1 · GET the caller's earned badges + impact aggregates. A pure read: awarding
+    happens at the qualifying event and in the nightly sweep (D-S6-3), never here."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        badges = (AccountBadge.objects.filter(account=request.user)
+                  .select_related("badge").order_by("earned_at"))
+        return Response({
+            "impact": impact_counts(request.user),
+            "badges": [{"badge_code": b.badge_id, "name": b.badge.name,
+                        "description": b.badge.description, "icon": b.badge.icon,
+                        "criteria": b.badge.criteria,
+                        "earned_at": b.earned_at.isoformat()} for b in badges],
+        })

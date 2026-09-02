@@ -623,4 +623,9 @@ class SignupAttendanceView(APIView):
                                            "message": "Only a confirmed shift has attendance"}},
                                 status=409)
             set_signup_status(signup, outcome)
+        if outcome == SignupStatus.COMPLETED:
+            # US-B1 · a completed shift can earn a badge. Idempotent + reconciled nightly,
+            # so this immediacy hook never double-awards (deferred import avoids a cycle).
+            from community.badges import award_badges_for
+            award_badges_for(signup.volunteer_account)
         return Response({"status": outcome})

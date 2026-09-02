@@ -44,6 +44,9 @@ _TYPES = [
     NotificationType("shift_reminder", "{shift_id, signup_id, window}", True, "kupkop://shifts"),
     NotificationType("pledge_received", "{need_id, pledge_id}", True, "kupkop://shelter/needs/{need_id}/pledges"),
     NotificationType("pledge_confirmed", "{need_id, pledge_id}", True, "kupkop://donations"),
+    # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone
+    # (pushing badges would cheapen push for a match or a pledge).
+    NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}
