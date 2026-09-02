@@ -425,7 +425,8 @@ class ReportDetailView(APIView):
                             status=404)
         approx_lat, approx_lng = coarsen_point(r.geom.y, r.geom.x)
         body = {
-            "report_id": str(r.report_id), "species": r.species, "condition": r.condition,
+            "report_id": str(r.report_id), "report_type": r.report_type,
+            "species": r.species, "condition": r.condition,
             "status": r.status, "notes": r.notes or None, "city": r.city,
             "reported_at": r.created_at.isoformat(),
             "photos": [p.url for p in r.photos.order_by("uploaded_at")],
