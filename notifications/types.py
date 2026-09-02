@@ -47,6 +47,8 @@ _TYPES = [
     # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone
     # (pushing badges would cheapen push for a match or a pledge).
     NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
+    # §11.3: a strong lost<->found suggestion pushes both reporters — a reunion is time-sensitive.
+    NotificationType("match_suggested", "{report_id}", True, "kupkop://reports/{report_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

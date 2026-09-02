@@ -11,7 +11,8 @@ from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.service import notify
 from sagip.geo import centroid_for, coarsen_point
-from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayReportPhoto, StrayStatus
+from sagip.models import (MatchStatus, OfferStatus, ReportMatch, ReportOffer, ReportType,
+                          RescueCase, StrayReport, StrayReportPhoto, StrayStatus)
 from sagip.permissions import is_active_claimer
 from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
 from sagip.status import set_report_status
@@ -61,6 +62,15 @@ class ReportsCreateView(APIView):
                 status="reported", escalation_level=0)
             for photo in d.get("photos", []):
                 StrayReportPhoto.objects.create(report=report, url=photo["file_url"])
+        # US-L2 · a new lost/found report triggers matching (§11). Best-effort: a matcher
+        # failure must never break a welfare report submission. Inert for plain strays.
+        if report.report_type in (ReportType.LOST, ReportType.FOUND):
+            import logging
+            from sagip.matching import run_matching
+            try:
+                run_matching(report)
+            except Exception:
+                logging.getLogger("kupkop.match").exception("matching failed on report create")
         return Response({"report_id": str(report.report_id), "status": "reported"}, status=201)
 
 
@@ -415,3 +425,78 @@ class ReportDetailView(APIView):
             body["precise_location"] = {"lat": r.geom.y, "lng": r.geom.x}
 
         return Response(body)
+
+
+def _match_repr(match, viewer_report):
+    """Present the OTHER report in the pair, plus the recomputed per-signal reasons (§11.2)
+    so the UI can say WHY, not just a percentage. Signals aren't stored — recomputed on read."""
+    from sagip.matching import score_signals
+    other = match.matched_report if match.report_id == viewer_report.pk else match.report
+    dist_m = viewer_report.geom.distance(other.geom) * 111195  # rough deg->m, display only
+    try:
+        signals = score_signals(viewer_report, other, dist_m)
+    except Exception:
+        signals = None
+    return {"match_id": str(match.pk), "status": match.status,
+            "score": float(match.score) if match.score is not None else None,
+            "signals": signals,
+            "report": {"report_id": str(other.pk), "report_type": other.report_type,
+                       "species": other.species, "breed": other.breed,
+                       "color_markings": other.color_markings, "city": other.city,
+                       "created_at": other.created_at.isoformat()}}
+
+
+class ReportMatchesView(APIView):
+    """US-L2 · GET the suggested matches for a report the caller reported. Either direction of a
+    pair is surfaced (report OR matched_report is this report)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, report_id):
+        report = StrayReport.objects.filter(pk=report_id).first()
+        if report is None:
+            return Response({"error": {"code": "not_found", "message": "No such report"}},
+                            status=404)
+        if report.reporter_account_id != request.user.pk:
+            return Response({"error": {"code": "forbidden",
+                                       "message": "Not your report"}}, status=403)
+        from django.db.models import Q
+        matches = (ReportMatch.objects
+                   .filter(Q(report=report) | Q(matched_report=report))
+                   .exclude(status=MatchStatus.DISMISSED)
+                   .select_related("report", "matched_report").order_by("-score"))
+        return Response({"results": [_match_repr(m, report) for m in matches]})
+
+
+class ReportMatchDecisionView(APIView):
+    """US-L2 · confirm or dismiss a suggested match. Either reporter in the pair may decide
+    (§11.3); a second decision on an already-decided match is 409 match_decided (the H3 TOCTOU
+    posture). Confirm links the pair and moves BOTH reports toward resolved (a reunion)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, report_id, match_id, action):
+        match = (ReportMatch.objects.select_related("report", "matched_report")
+                 .filter(pk=match_id).first())
+        if match is None or report_id not in (match.report_id, match.matched_report_id):
+            return Response({"error": {"code": "not_found", "message": "No such match"}},
+                            status=404)
+        reporters = {match.report.reporter_account_id, match.matched_report.reporter_account_id}
+        if request.user.pk not in reporters:
+            return Response({"error": {"code": "forbidden",
+                                       "message": "Not your match to decide"}}, status=403)
+        with transaction.atomic():
+            locked = ReportMatch.objects.select_for_update().get(pk=match.pk)
+            if locked.status != MatchStatus.SUGGESTED:
+                return Response({"error": {"code": "match_decided",
+                                           "message": "This match was already decided"}},
+                                status=409)
+            if action == "confirm":
+                locked.status = MatchStatus.CONFIRMED
+                locked.save(update_fields=["status"])
+                for rep in (match.report, match.matched_report):
+                    if rep.status != StrayStatus.RESOLVED:
+                        set_report_status(rep, StrayStatus.RESOLVED, request.user,
+                                          note="lost & found match confirmed")
+            else:
+                locked.status = MatchStatus.DISMISSED
+                locked.save(update_fields=["status"])
+        return Response({"status": locked.status})
