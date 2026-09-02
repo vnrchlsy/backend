@@ -179,15 +179,21 @@ class MeImpactView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        badges = (AccountBadge.objects.filter(account=request.user)
-                  .select_related("badge").order_by("earned_at"))
-        return Response({
-            "impact": impact_counts(request.user),
-            "badges": [{"badge_code": b.badge_id, "name": b.badge.name,
-                        "description": b.badge.description, "icon": b.badge.icon,
-                        "criteria": b.badge.criteria,
-                        "earned_at": b.earned_at.isoformat()} for b in badges],
-        })
+        # Return the WHOLE catalog with an earned flag, so the grid can show earned badges
+        # bright and unearned ones dimmed-with-criteria (US-B2) from a single call — an
+        # unearned badge is never rendered as earned (the Reliable-chip trust rule).
+        from .models import Badge
+        earned = {b.badge_id: b.earned_at
+                  for b in AccountBadge.objects.filter(account=request.user)}
+        catalog = Badge.objects.all().order_by("badge_code")
+        badges = [{"badge_code": b.pk, "name": b.name, "description": b.description,
+                   "icon": b.icon, "criteria": b.criteria,
+                   "earned": b.pk in earned,
+                   "earned_at": earned[b.pk].isoformat() if b.pk in earned else None}
+                  for b in catalog]
+        # earned first, then the rest — stable within each group.
+        badges.sort(key=lambda x: (not x["earned"], x["badge_code"]))
+        return Response({"impact": impact_counts(request.user), "badges": badges})
 
 
 # --- US-T1 · success stories ---------------------------------------------------

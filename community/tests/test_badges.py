@@ -115,8 +115,13 @@ def test_me_impact_returns_badges_and_aggregates(client):
     body = res.json()
     assert body["impact"]["shifts_completed"] == 2
     assert body["impact"]["pets_rehomed"] == 1
-    codes = {b["badge_code"] for b in body["badges"]}
-    assert {"first_shift", "rehomed_1"} <= codes
+    # the full catalog is returned with earned flags (US-B2 grid: earned bright, rest dimmed)
+    by_code = {b["badge_code"]: b for b in body["badges"]}
+    assert by_code["first_shift"]["earned"] is True
+    assert by_code["first_shift"]["earned_at"] is not None
+    assert by_code["shifts_50"]["earned"] is False          # unearned, but present with criteria
+    assert by_code["shifts_50"]["criteria"]
+    assert body["badges"][0]["earned"] is True              # earned sort first
 
 
 @pytest.mark.django_db
