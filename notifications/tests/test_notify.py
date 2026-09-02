@@ -2,7 +2,7 @@ import pytest
 
 from accounts.factories import AccountFactory
 from notifications.models import Notification
-from notifications.service import notify
+from notifications.service import UnregisteredNotificationType, notify
 
 
 @pytest.mark.django_db
@@ -17,3 +17,13 @@ def test_notify_creates_an_unread_row_for_the_account():
     assert n.read is False
     assert n.data == {"verification_id": "abc"}
     assert n.title == "You're verified"
+
+
+@pytest.mark.django_db
+def test_notify_refuses_an_unregistered_type():
+    # US-N1 · a typo'd or never-registered type must fail loudly at the write door,
+    # never silently create a notification nothing knows how to route.
+    acc = AccountFactory()
+    with pytest.raises(UnregisteredNotificationType):
+        notify(acc, "definitely_not_a_real_type")
+    assert Notification.objects.filter(account=acc).count() == 0

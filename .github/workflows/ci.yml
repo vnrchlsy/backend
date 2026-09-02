@@ -1,0 +1,66 @@
+name: backend
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: pytest · PostGIS
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:15-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # config/settings.py sets neither USER nor PASSWORD (it relies on local peer auth),
+      # so libpq takes them from these. HOST is hardcoded to localhost in settings, which
+      # is where the service container is published.
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # GeoDjango dlopen()s the GEOS and GDAL shared libraries at import time — without
+      # them every test fails at settings load, not at the first spatial query.
+      - name: Install GEOS/GDAL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            binutils libproj-dev gdal-bin libgeos-dev
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Catches a model edited without a migration — the drift that makes a green suite
+      # lie about what the database will actually look like.
+      - name: Migrations are up to date
+        run: python manage.py makemigrations --check --dry-run
+
+      # pytest-django creates kupkop_test (settings TEST.NAME) on the service container.
+      - name: Tests
+        run: python -m pytest -q

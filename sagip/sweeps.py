@@ -146,3 +146,19 @@ def expire_stalled_claims(now=None):
                       data={"report_id": str(report.pk)})
         expired.append(case)
     return expired
+
+
+def expire_offers(now=None):
+    """US-N2 · an `open` offer past its 48h window (decision 14) moves to `expired`.
+
+    Nothing else wrote this transition before this sweep existed — US-E2's own
+    "a reopened case still has people to re-ask" arithmetic (above) silently assumed
+    `expired` offers would already be filtered out by the time it ran, but the value was
+    never actually written anywhere. Idempotent (only `OPEN` rows are touched) and never
+    touches `MATCHED` — a matched offer's fate is `expire_stalled_claims`'s call, not
+    this sweep's; this one only ever moves `open → expired`.
+    """
+    now = now or timezone.now()
+    offers = ReportOffer.objects.filter(status=OfferStatus.OPEN, expires_at__lte=now)
+    count = offers.update(status=OfferStatus.EXPIRED)
+    return count

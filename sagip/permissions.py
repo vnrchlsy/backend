@@ -1,17 +1,7 @@
-from rest_framework.permissions import IsAuthenticated
-
-from listings.visibility import account_is_verified_rescuer
-
-
-class IsVerifiedRescuer(IsAuthenticated):
-    """US-K1 · only an approved rescuer capability (Verified Member) or an approved
-    shelter_org verification (verified shelter) may claim a case — the exact predicate
-    that already gates public listing visibility (listings/visibility.py::
-    public_poster_q). An unverified caller gets 403, which the app renders as the
-    get-verified gate (`rescue-claim-gate`)."""
-
-    message = "Claiming a case requires a Verified Member badge or a verified shelter account."
-
-    def has_permission(self, request, view):
-        return (super().has_permission(request, view)
-                and account_is_verified_rescuer(request.user))
+def is_active_claimer(report, user):
+    """US-SEC1 · is `user` the account with the currently-active claim on `report`?
+    An expired claim doesn't count — that claimer is no longer the one who needs the
+    precise spot; a fresh claimer (or no one) does."""
+    if not getattr(user, "is_authenticated", False):
+        return False
+    return report.cases.filter(claimed_by_account=user, expired_at__isnull=True).exists()

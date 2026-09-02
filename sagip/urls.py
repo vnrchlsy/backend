@@ -1,7 +1,7 @@
 from django.urls import path
 
-from sagip.views import (CaseStatusView, MyOffersView, MyReportsView, MyRescuesView,
-                         ReportClaimView, ReportDetailView, ReportOffersView,
+from sagip.views import (CaseDetailView, CaseStatusView, MyOffersView, MyReportsView,
+                         MyRescuesView, ReportClaimView, ReportDetailView, ReportOffersView,
                          ReportOfferWithdrawView, RescueMapView, ReportsCreateView)
 
 urlpatterns = [
@@ -11,6 +11,7 @@ urlpatterns = [
     path("reports/<uuid:report_id>/claim", ReportClaimView.as_view()),
     path("reports/<uuid:report_id>/offers", ReportOffersView.as_view()),
     path("reports/<uuid:report_id>/offers/<uuid:offer_id>", ReportOfferWithdrawView.as_view()),
+    path("cases/<uuid:case_id>", CaseDetailView.as_view()),
     path("cases/<uuid:case_id>/status", CaseStatusView.as_view()),
     path("me/reports", MyReportsView.as_view()),
     path("me/rescues", MyRescuesView.as_view()),

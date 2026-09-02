@@ -1,5 +1,7 @@
 import pytest
 from django.test import Client
+from django_otp import DEVICE_ID_SESSION_KEY
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from accounts.factories import AccountFactory
 from accounts.models import StaffProfile
@@ -16,6 +18,11 @@ def staff_reviewer(db, django_user_model):
     StaffProfile.objects.create(user=user, account=account)
     client = Client()
     client.force_login(user)
+    # US-SEC3 · the admin now gates on a verified TOTP device, not just is_staff.
+    device = TOTPDevice.objects.create(user=user, name="default", confirmed=True)
+    session = client.session
+    session[DEVICE_ID_SESSION_KEY] = device.persistent_id
+    session.save()
     return client, account
 
 

@@ -6,7 +6,7 @@ from common.storage import SIGNED_URL_TTL, signed_get_url
 def test_dev_slice_returns_the_stored_reference_unchanged(settings):
     # No bucket configured (the dev slice: POST /media/presign returns example.invalid
     # placeholders). Signing degrades to the stored ref so review still renders.
-    settings.MEDIA_S3_BUCKET = ""
+    settings.MEDIA_S3_BUCKET_RESTRICTED = ""
     url = "https://example.invalid/dev-uploads/abc/gov_id"
     assert signed_get_url(url) == url
 

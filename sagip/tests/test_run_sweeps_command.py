@@ -18,4 +18,4 @@ def test_run_sweeps_reports_what_it_did(capsys):
 
     call_command("run_sweeps")
     out = capsys.readouterr().out
-    assert "escalated" in out and "expired" in out
+    assert "escalated" in out and "expired" in out and "offer" in out

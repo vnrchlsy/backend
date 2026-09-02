@@ -1,22 +1,35 @@
-"""US-F0 · invoke both Sagip sweeps once.
+"""US-F0 / US-N2 / US-V7 · invoke every scheduled sweep once.
 
     python manage.py run_sweeps
 
-Meant to be triggered by system cron (or run by hand in dev); no scheduler is embedded
-here — see US-F0's decision to record (cron/command over Celery-beat for MVP; revisit
-when Sprint 5's push delivery needs workers anyway). The sweep functions themselves don't
-change no matter what ends up calling this command.
+One command, one cron entry, however many domains own sweeps. Sweeps were multiplying
+across apps (sagip's three, now volunteer's reminders) and a per-app command would mean a
+per-app cron line to forget. No scheduler is embedded here — US-F0's decision (cron over
+Celery-beat) still stands, and D-S5-6 reconfirmed it for push.
+
+⚠️ `purge_expired_documents` (US-SEC4) stays its own command deliberately: retention
+deletion is destructive and should be schedulable — and auditable — independently of the
+routine hourly sweeps.
 """
 from django.core.management.base import BaseCommand
 
-from sagip.sweeps import escalate_reports, expire_stalled_claims
+from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
+from volunteer.sweeps import remind_shifts
+
+# (label, callable) — each returns a list of the rows it touched.
+SWEEPS = [
+    ("escalated", escalate_reports),
+    ("expired", expire_stalled_claims),
+    ("reminded", remind_shifts),
+]
 
 
 class Command(BaseCommand):
-    help = "Run the Sagip sweeps: escalate unclaimed reports, expire stalled claims."
+    help = "Run every scheduled sweep: escalation, stalled claims, offer expiry, shift reminders."
 
     def handle(self, *args, **options):
-        escalated = escalate_reports()
-        expired = expire_stalled_claims()
-        self.stdout.write(self.style.SUCCESS(
-            f"escalated {len(escalated)} report(s), expired {len(expired)} claim(s)"))
+        parts = [f"{label} {len(fn())}" for label, fn in SWEEPS]
+        # expire_offers returns a count, not a list — kept separate rather than forcing a
+        # uniform return type on a sweep that has no rows worth handing back.
+        parts.append(f"expired {expire_offers()} offer(s)")
+        self.stdout.write(self.style.SUCCESS(", ".join(parts)))

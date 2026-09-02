@@ -17,7 +17,7 @@ def public_poster_q():
 def account_is_verified_rescuer(account):
     """The per-account form of `public_poster_q()`'s predicate — an approved `rescuer`
     capability (Verified Member) OR an approved `shelter_org` verification (verified
-    shelter). Sprint 3's claim gate (`sagip.permissions.IsVerifiedRescuer`, US-K1) needs a
+    shelter). Sprint 3's claim gate (`listings.permissions.IsVerifiedRescuer`, US-K1) needs a
     single-account boolean rather than a queryset filter; keep both derivations in
     lockstep — the same identity that may list may claim."""
     return (account.capabilities.filter(capability="rescuer", status="approved").exists()

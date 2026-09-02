@@ -16,4 +16,7 @@ urlpatterns = [
     path("api/v1/", include("shelter.urls")),
     path("api/v1/", include("notifications.urls")),
     path("api/v1/", include("sagip.urls")),
+    path("api/v1/", include("moderation.urls")),
+    path("api/v1/", include("volunteer.urls")),
+    path("api/v1/", include("devices.urls")),
 ]

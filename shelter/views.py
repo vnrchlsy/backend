@@ -1,11 +1,14 @@
 from django.db import transaction
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Address
-from shelter.models import ShelterProfile
+from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
-from shelter.serializers import ShelterProfileCreateSerializer, ShelterProfilePatchSerializer
+from shelter.serializers import (DonationQrUploadSerializer, ShelterProfileCreateSerializer,
+                                 ShelterProfilePatchSerializer)
+from verifications.models import VerificationRequest
 
 
 class ShelterProfileView(APIView):
@@ -76,6 +79,58 @@ class ShelterDashboardView(APIView):
             "counts": {"draft_listings": draft_listings, "adopted": 0, "donations": 0},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
         })
+
+
+class DonationQrView(APIView):
+    """US-Q1 · upload (or replace) a donation QR. One row per (account, provider) — a
+    second POST for the same provider is an edit, not a second QR. Uploading is not
+    gated on the org's own approval (decision 2's draft-first pattern, same as listings)
+    — the public gate (US-Q2) is the separate, always-both-keys check."""
+    permission_classes = [IsShelter]
+
+    def post(self, request):
+        s = DonationQrUploadSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        # ⚠️ Any edit resets `verified` — the obvious fraud is swapping the image after
+        # a reviewer already checked it. This endpoint's only job is "submit an image
+        # for this provider," so every call here is by definition a new image to check.
+        # No unique(account, provider) constraint exists in the DDL, so this looks up
+        # the latest row rather than relying on get_or_create's implicit uniqueness.
+        qr = (DonationQr.objects.filter(account=request.user, provider=d["provider"])
+              .order_by("-created_at").first())
+        if qr is not None:
+            qr.account_name = d["account_name"]
+            qr.qr_image_url = d["file_url"]
+            qr.verified = False
+            qr.save(update_fields=["account_name", "qr_image_url", "verified"])
+        else:
+            qr = DonationQr.objects.create(
+                account=request.user, provider=d["provider"], account_name=d["account_name"],
+                qr_image_url=d["file_url"], verified=False)
+        return Response({"donation_qr_id": str(qr.pk), "verified": qr.verified}, status=201)
+
+
+class ShelterDonationQrPublicView(APIView):
+    """US-Q2 · the public donate surface's data source. Two-key gate, always both: the
+    org must be approved (any approved shelter_org verification — US-X4's rule) AND the
+    QR itself reviewer-verified. Either key missing reads as 404, not an empty list —
+    there is nothing public to say about an org that hasn't cleared both checks."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, account_id):
+        approved = VerificationRequest.objects.filter(
+            account_id=account_id, type="shelter_org", status="approved").exists()
+        if not approved:
+            return Response({"error": {"code": "not_found", "message": "No such shelter"}},
+                            status=404)
+        qrs = list(DonationQr.objects.filter(account_id=account_id, verified=True))
+        if not qrs:
+            return Response({"error": {"code": "not_found",
+                                       "message": "No verified donation QR on file"}}, status=404)
+        return Response({"donation_qrs": [
+            {"provider": q.provider, "account_name": q.account_name, "qr_image_url": q.qr_image_url}
+            for q in qrs]})
 
 
 def _profile_repr(p):

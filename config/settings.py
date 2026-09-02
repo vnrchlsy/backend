@@ -25,12 +25,20 @@ INSTALLED_APPS = [
     "django.contrib.gis",   # Sagip (US-S1) uses PostGIS: PointField + spatial queries
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
+    # US-SEC3 · TOTP for the Django admin. django_otp's own migrations create the device
+    # tables; otp_totp is the one factor we support (no SMS/email OTP for staff — a
+    # phished password alone must never be enough to reach gov IDs).
+    "django_otp",
+    "django_otp.plugins.otp_totp",
     "accounts",
     "verifications",
     "listings",
     "shelter",
     "notifications",
     "sagip",
+    "moderation",
+    "volunteer",
+    "devices",
 ]
 
 # SecurityMiddleware + CommonMiddleware served the JWT API alone in Sprint 1. The admin
@@ -42,6 +50,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # US-SEC3 · after AuthenticationMiddleware, mirroring it: populates
+    # request.user.otp_device / is_verified() from the session, which
+    # accounts.apps.AccountsConfig.ready()'s OTPAdminSite swap then gates on.
+    "django_otp.middleware.OTPMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -88,7 +100,15 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["accounts.authentication.AccountJWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"otp_resend_min": "1/min", "otp_resend_hour": "5/hour"},
+    # US-SEC2 · policy numbers, not code constants — revisit with real traffic data.
+    "DEFAULT_THROTTLE_RATES": {
+        "otp_resend_min": "1/min", "otp_resend_hour": "5/hour",
+        "login_ip": "20/hour", "login_identifier": "10/hour",
+        "signup_ip": "10/hour",
+        "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
+        "report_create": "20/day", "offer_create": "20/hour",
+        "moderation_flag_create": "20/day",
+    },
     "EXCEPTION_HANDLER": "common.errors.error_handler",
 }
 
@@ -109,3 +129,38 @@ OTP_MAX_ATTEMPTS = 5
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an
 # older consent is distinguishable from consent to the current text.
 TERMS_VERSION = "2026-08-01"
+
+# D-S5-1 · the liability waiver is a versioned legal document, unlike the per-shift
+# contact-sharing opt-in. Bump when the waiver text changes so an older acceptance is
+# distinguishable from acceptance of the current text.
+# ⚠️ The waiver TEXT does not exist yet — this version points at a document that must be
+# written before Kawang-Gawa reaches real volunteers (a launch blocker for M3).
+WAIVER_VERSION = "2026-08-24"
+
+# US-SEC3 · session hardening for the reviewer surface. Gated on DEBUG rather than
+# hardcoded true: the *_SECURE flags require HTTPS to even set the cookie, which the
+# local/dev/test runserver never serves — hardcoding them would silently break every
+# admin session (and every admin_client-based test) outside of a TLS-terminated deploy.
+# SESSION_COOKIE_AGE is short because the only session-cookie consumer in this app is
+# the staff admin (the mobile/API surface is JWT-only, see the INSTALLED_APPS note above).
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_AGE = 3600  # 1 hour
+OTP_TOTP_ISSUER = "Kupkop PH Admin"
+
+# US-SEC4 · RA 10173 data minimization — decided 2026-08-23: identity documents are kept
+# 90 days after a terminal (approved/rejected) decision, then the file is deleted and
+# verification_document.file_url is nulled; the row itself (and the decision) survives.
+DOCUMENT_RETENTION_DAYS = 90
+
+# US-P2 · FCM push send seam — unset by default (no-op sender, nothing sent). Set both
+# to enable the live FCM HTTP v1 transport in notifications/push.py. Never commit a
+# real credentials path/secret here — supply via environment at deploy time.
+FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
+FCM_CREDENTIALS_PATH = os.environ.get("FCM_CREDENTIALS_PATH", "")
+
+# US-D2 · S3 media storage seam — two buckets by visibility (see common/storage.py).
+# Unset by default (dev stub; no real object is stored or signed). Set both to activate
+# the live boto3 path. Never commit bucket names that contain account IDs to VCS.
+MEDIA_S3_BUCKET_PUBLIC = os.environ.get("MEDIA_S3_BUCKET_PUBLIC", "")
+MEDIA_S3_BUCKET_RESTRICTED = os.environ.get("MEDIA_S3_BUCKET_RESTRICTED", "")
