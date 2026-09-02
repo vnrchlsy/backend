@@ -52,15 +52,30 @@ class ReportsCreateView(APIView):
         s = ReportCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
+        # US-L1 · describable fields (lost/found). A pet_id the caller owns prefills any the
+        # caller left blank — but the values are STORED on the report (D-S6-1), so a later pet
+        # edit can't rewrite what was reported. Ownership-checked: another user's pet is ignored.
+        describables = {k: (d.get(k) or None) for k in ("breed", "color_markings",
+                                                        "size_category", "sex")}
+        pet_id = d.get("pet_id")
+        if pet_id is not None:
+            from listings.models import Pet
+            pet = Pet.objects.filter(pk=pet_id, owner_account=request.user).first()
+            if pet is not None:
+                for field in ("breed", "color_markings", "size_category", "sex"):
+                    if not describables[field]:
+                        describables[field] = getattr(pet, field, None) or None
         with transaction.atomic():
             report = StrayReport.objects.create(
                 reporter_account=request.user,
+                report_type=d.get("report_type", "stray"),
+                pet_id=pet_id,
                 is_anonymous=d.get("is_anonymous", False),
                 species=d["species"], condition=d["condition"], notes=d.get("notes", ""),
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
                 city=(d.get("city") or "").strip() or None,   # client-resolved city label, or NULL
-                status="reported", escalation_level=0)
+                status="reported", escalation_level=0, **describables)
             for photo in d.get("photos", []):
                 StrayReportPhoto.objects.create(report=report, url=photo["file_url"])
         # US-L2 · a new lost/found report triggers matching (§11). Best-effort: a matcher
