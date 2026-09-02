@@ -128,3 +128,120 @@ class MeImpactView(APIView):
                         "criteria": b.badge.criteria,
                         "earned_at": b.earned_at.isoformat()} for b in badges],
         })
+
+
+# --- US-T1 · success stories ---------------------------------------------------
+from django.db.models import Count
+
+from .models import StoryPost, StoryPhoto, StoryReaction, StoryStatus, StoryType
+from .serializers import StoryCreateSerializer
+
+
+def _author_city(account):
+    # D-S6-4 · a story renders the author's city (city-level, like everywhere). An account's
+    # city is its primary Address's city; accounts without one render an empty string.
+    addr = next((a for a in account.addresses.all() if a.is_primary), None)
+    return addr.city if addr else ""
+
+
+def _story_repr(story, my_reacted_ids):
+    return {"story_id": str(story.pk),
+            "author": {"name": story.author_account.display_name,
+                       "city": _author_city(story.author_account)},
+            "story_type": story.story_type, "caption": story.caption, "status": story.status,
+            "photos": [{"url": p.url, "is_primary": p.is_primary} for p in story.photos.all()],
+            "reaction_count": getattr(story, "_rcount", None)
+            if getattr(story, "_rcount", None) is not None else story.reactions.count(),
+            "my_reaction": story.pk in my_reacted_ids}
+
+
+class StoriesView(APIView):
+    """US-T1 · GET the public story feed (published only, newest-first, city-filterable);
+    POST a new story (min 1 photo — a story is a picture with a caption)."""
+
+    def get_permissions(self):
+        return [IsAuthenticated()] if self.request.method == "POST" else [AllowAny()]
+
+    def get(self, request):
+        qs = (StoryPost.objects.filter(status=StoryStatus.PUBLISHED)
+              .select_related("author_account")
+              .prefetch_related("photos", "author_account__addresses")
+              .annotate(_rcount=Count("reactions")).order_by("-created_at"))
+        city = request.query_params.get("city")
+        if city:
+            qs = qs.filter(author_account__addresses__is_primary=True,
+                           author_account__addresses__city=city).distinct()
+        page = list(qs[:PAGE_SIZE])
+        mine = set()
+        if request.user and request.user.is_authenticated:
+            mine = set(StoryReaction.objects
+                       .filter(account=request.user, story__in=[s.pk for s in page])
+                       .values_list("story_id", flat=True))
+        return Response({"results": [_story_repr(s, mine) for s in page]})
+
+    def post(self, request):
+        s = StoryCreateSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        if not d["photos"]:
+            return _err("photo_required", "A story needs at least one photo.", 422)
+        # Type auto-derives from the link (T0): an adoption story if it cites a listing, a
+        # rescue story if it cites a case, else whatever was chosen (default general).
+        if d.get("adoption_listing_id"):
+            story_type = StoryType.ADOPTION
+        elif d.get("rescue_case_id"):
+            story_type = StoryType.RESCUE
+        else:
+            story_type = d.get("story_type") or StoryType.GENERAL
+        story = StoryPost.objects.create(
+            author_account=request.user, caption=d["caption"], story_type=story_type,
+            adoption_listing_id=d.get("adoption_listing_id"),
+            rescue_case_id=d.get("rescue_case_id"))
+        for ph in d["photos"]:
+            StoryPhoto.objects.create(story=story, url=ph["file_url"],
+                                      is_primary=ph.get("is_primary", False))
+        return Response({"story_id": str(story.pk)}, status=201)
+
+
+class StoryDetailView(APIView):
+    """US-T1 · one story. A hidden story 404s for everyone but its author, who sees it with its
+    `hidden` status (moderation is never a silent vanish)."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, story_id):
+        story = (StoryPost.objects.select_related("author_account")
+                 .prefetch_related("photos", "author_account__addresses")
+                 .filter(pk=story_id).first())
+        if story is None:
+            return _err("not_found", "No such story.", 404)
+        is_author = (request.user and request.user.is_authenticated
+                     and request.user.pk == story.author_account_id)
+        if story.status == StoryStatus.HIDDEN and not is_author:
+            return _err("not_found", "No such story.", 404)
+        mine = set()
+        if request.user and request.user.is_authenticated:
+            if StoryReaction.objects.filter(account=request.user, story=story).exists():
+                mine = {story.pk}
+        return Response(_story_repr(story, mine))
+
+
+class StoryReactionView(APIView):
+    """US-T1 · react / un-react. Idempotent via uq_story_reaction: POST twice is still one row."""
+    permission_classes = [IsAuthenticated]
+
+    def _count(self, story):
+        return StoryReaction.objects.filter(story=story).count()
+
+    def post(self, request, story_id):
+        story = StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED).first()
+        if story is None:
+            return _err("not_found", "No such story.", 404)
+        StoryReaction.objects.get_or_create(story=story, account=request.user)
+        return Response({"reaction_count": self._count(story)})
+
+    def delete(self, request, story_id):
+        story = StoryPost.objects.filter(pk=story_id).first()
+        if story is None:
+            return _err("not_found", "No such story.", 404)
+        StoryReaction.objects.filter(story=story, account=request.user).delete()
+        return Response({"reaction_count": self._count(story)})

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import NeedCategory
+from .models import NeedCategory, StoryType
 
 
 class NeedCreateSerializer(serializers.Serializer):
@@ -17,3 +17,16 @@ class PledgeCreateSerializer(serializers.Serializer):
 class ReceivedSerializer(serializers.Serializer):
     pledge_id = serializers.UUIDField()
     quantity_received = serializers.IntegerField(min_value=1)
+
+
+class StoryPhotoSerializer(serializers.Serializer):
+    file_url = serializers.CharField()
+    is_primary = serializers.BooleanField(required=False, default=False)
+
+
+class StoryCreateSerializer(serializers.Serializer):
+    caption = serializers.CharField(required=False, allow_blank=True, default="")
+    story_type = serializers.ChoiceField(choices=StoryType.choices, required=False)
+    photos = StoryPhotoSerializer(many=True, required=False, default=list)
+    adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)
+    rescue_case_id = serializers.UUIDField(required=False, allow_null=True)
