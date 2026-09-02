@@ -12,6 +12,7 @@ from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.measure import D
 from django.utils import timezone
 
+from common.analytics import emit
 from notifications.service import notify
 
 from .models import MatchStatus, ReportMatch, ReportType, StrayReport, StrayStatus
@@ -111,7 +112,12 @@ def run_matching(report):
             # Notify only on first suggestion of a pair — the row's existence IS the dedup, so
             # a re-scored suggestion never re-buzzes (derived-not-stored, the sweep-reminder rule).
             _notify_pair(report, cand)
+            emit("match_suggested", score_bucket=_bucket(total))
     return persisted
+
+
+def _bucket(score):
+    return "high" if score >= 0.8 else "med" if score >= 0.6 else "low"
 
 
 def sweep_matches():

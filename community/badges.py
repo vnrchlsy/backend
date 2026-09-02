@@ -13,6 +13,7 @@ D-S6-2: criteria are shift-agnostic — any completed Kawang-Gawa shift counts, 
 from listings.models import AdoptionListing, ListingStatus
 from sagip.models import RescueCase
 
+from common.analytics import emit
 from notifications.service import notify
 
 from .models import AccountBadge, Badge, NeedPledge, PledgeStatus
@@ -71,4 +72,5 @@ def award_badges_for(account):
         notify(account, "badge_earned", title="New badge!",
                body=f"You earned “{badge.name}”." if badge else "You earned a badge.",
                data={"badge_code": code})
+        emit("badge_earned", badge_code=code)
     return awarded

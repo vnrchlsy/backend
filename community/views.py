@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.analytics import emit
 from notifications.service import notify
 from shelter.permissions import IsShelter
 
@@ -68,6 +69,7 @@ class NeedPledgesView(APIView):
         notify(need.shelter_account, "pledge_received",
                title="New pledge", body=f"Someone pledged to “{need.title}”.",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
+        emit("need_pledged", category=need.category)
         return Response({"pledge_id": str(pledge.pk)}, status=201)
 
 
@@ -110,6 +112,7 @@ class NeedReceivedView(APIView):
         notify(pledge.pledger_account, "pledge_confirmed",
                title="Pledge received", body=f"“{need.title}” confirmed your pledge. Salamat!",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
+        emit("pledge_delivered", category=need.category)
         return Response({"need_status": need.status})
 
 
@@ -200,6 +203,7 @@ class StoriesView(APIView):
         for ph in d["photos"]:
             StoryPhoto.objects.create(story=story, url=ph["file_url"],
                                       is_primary=ph.get("is_primary", False))
+        emit("story_posted", story_type=story_type)
         return Response({"story_id": str(story.pk)}, status=201)
 
 
@@ -236,7 +240,9 @@ class StoryReactionView(APIView):
         story = StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED).first()
         if story is None:
             return _err("not_found", "No such story.", 404)
-        StoryReaction.objects.get_or_create(story=story, account=request.user)
+        _, created = StoryReaction.objects.get_or_create(story=story, account=request.user)
+        if created:
+            emit("story_reacted", story_type=story.story_type)
         return Response({"reaction_count": self._count(story)})
 
     def delete(self, request, story_id):

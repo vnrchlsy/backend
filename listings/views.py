@@ -428,6 +428,9 @@ class PlacementDecisionView(APIView):
                 # reconciled nightly; deferred import avoids a cycle).
                 from community.badges import award_badges_for
                 award_badges_for(inq.listing.posted_by)
+                from common.analytics import emit
+                emit("inquiry_decided", outcome="accepted")
+                emit("adoption_completed")
                 return Response({"pet_id": str(pet.pk)}, status=200)
             # decline
             inq.status = InquiryStatus.DECLINED
@@ -435,4 +438,6 @@ class PlacementDecisionView(APIView):
             inq.save(update_fields=["status", "decided_at"])
             inq.listing.status = ListingStatus.AVAILABLE
             inq.listing.save(update_fields=["status"])
+            from common.analytics import emit
+            emit("inquiry_decided", outcome="declined")
             return Response(status=200)

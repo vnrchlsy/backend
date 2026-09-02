@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.analytics import emit
 from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.service import notify
@@ -71,6 +72,7 @@ class ReportsCreateView(APIView):
                 run_matching(report)
             except Exception:
                 logging.getLogger("kupkop.match").exception("matching failed on report create")
+        emit("report_created", type=report.report_type, species=report.species)
         return Response({"report_id": str(report.report_id), "status": "reported"}, status=201)
 
 
@@ -181,6 +183,7 @@ class CaseStatusView(APIView):
             # US-B1 · a resolved rescue can earn a badge (idempotent + reconciled nightly).
             from community.badges import award_badges_for
             award_badges_for(case.claimed_by_account)
+            emit("case_resolved")
 
         return Response({"status": target}, status=200)
 
@@ -499,4 +502,5 @@ class ReportMatchDecisionView(APIView):
             else:
                 locked.status = MatchStatus.DISMISSED
                 locked.save(update_fields=["status"])
+        emit("match_confirmed" if action == "confirm" else "match_dismissed")
         return Response({"status": locked.status})

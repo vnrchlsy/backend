@@ -123,6 +123,22 @@ def test_a_hidden_story_404s_for_a_stranger_but_the_author_still_sees_it(client)
 
 
 @pytest.mark.django_db
+def test_posting_a_story_emits_a_server_side_analytics_event(client, caplog):
+    """US-Y1 · a server-authoritative outcome emits one account-free event."""
+    import json
+    import logging
+    with caplog.at_level(logging.INFO, logger="kupkop.analytics"):
+        client.post("/api/v1/stories",
+                    {"caption": "hi", "photos": [{"file_url": "https://x/a.jpg"}]},
+                    content_type="application/json", **_hdr(AccountFactory()))
+    events = [json.loads(r.getMessage()) for r in caplog.records
+              if r.name == "kupkop.analytics"]
+    posted = [e for e in events if e["event"] == "story_posted"]
+    assert len(posted) == 1
+    assert "account_id" not in posted[0] and "account" not in posted[0]  # D-S6-6: no PII
+
+
+@pytest.mark.django_db
 def test_flagging_a_story_uses_the_moderation_pipeline(client):
     story = _story()
     user = AccountFactory()
