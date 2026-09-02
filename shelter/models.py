@@ -16,6 +16,11 @@ class OrgType(models.TextChoices):
     POUND = "pound"
 
 
+class QrProvider(models.TextChoices):
+    GCASH = "gcash"
+    MAYA = "maya"
+
+
 class RegType(models.TextChoices):
     SEC = "SEC"
     DTI = "DTI"
@@ -49,3 +54,23 @@ class ShelterProfile(models.Model):
 
     class Meta:
         db_table = "shelter_profile"
+
+
+class DonationQr(models.Model):
+    """A donation QR for an account that receives donations (matches kupkop_mvp_schema.sql
+    `donation_qr`). US-X3 adds only the reviewer-checked `verified` flag and its gate — the
+    donations UI that lets a shelter upload a QR is Sprint 4. The public donate path is a
+    two-key gate: the org must be approved AND the QR verified, so money can never route to an
+    unchecked payment target even for an otherwise-approved org."""
+
+    donation_qr_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="donation_qrs")
+    provider = models.CharField(max_length=10, choices=QrProvider.choices)
+    account_name = models.CharField(max_length=120)
+    qr_image_url = models.TextField()
+    verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "donation_qr"
+        indexes = [models.Index(fields=["account"], name="idx_donation_qr_account")]

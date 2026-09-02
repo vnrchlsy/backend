@@ -1,8 +1,7 @@
 from django.urls import path
 
-from listings.views import ListingsView, ReportsMapView
+from listings.views import ListingsView
 
 urlpatterns = [
     path("listings", ListingsView.as_view()),
-    path("reports/map", ReportsMapView.as_view()),
 ]

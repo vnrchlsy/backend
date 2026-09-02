@@ -60,15 +60,21 @@ class ShelterDashboardView(APIView):
         vr = (request.user.verifications.filter(type="shelter_org")
               .order_by("-submitted_at").first())
         submitted = vr is not None
-        approved = bool(vr and vr.status == "approved")
+        # `approved` = ANY approved shelter_org request (US-X4), matching public_poster_q() so the
+        # dashboard and listing visibility never disagree. `vr` (latest) still drives the status/docs
+        # shown, so an in-flight tier-2 upgrade reads as pending WITHOUT revoking the tier-1 gates.
+        approved = request.user.verifications.filter(type="shelter_org", status="approved").exists()
         docs = [{"doc_type": d.doc_type, "status": d.status}
                 for d in vr.documents.all()] if vr else []
         draft_listings = request.user.listings.count()   # unverified: everything they post is a draft
+        # US-X3 · donations are a TWO-key gate: org approved AND a reviewer-verified QR on file.
+        # Still fully derived (§3.5) — no stored donations flag; the QR's `verified` is the check.
+        donations_enabled = approved and request.user.donation_qrs.filter(verified=True).exists()
         return Response({
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
             "counts": {"draft_listings": draft_listings, "adopted": 0, "donations": 0},
-            "gates": {"can_publish": approved, "donations_enabled": approved},
+            "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
         })
 
 
