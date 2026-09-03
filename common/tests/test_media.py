@@ -7,8 +7,16 @@ import pytest
 from PIL import Image
 from PIL.ExifTags import Base as ExifTag
 
-from common.media import (DOC_CONTENT_TYPES, IMAGE_CONTENT_TYPES, MAX_DOC_BYTES,
-                          MAX_IMAGE_BYTES, PUBLIC, RESTRICTED, policy_for, strip_exif)
+from common.media import (
+    DOC_CONTENT_TYPES,
+    IMAGE_CONTENT_TYPES,
+    MAX_DOC_BYTES,
+    MAX_IMAGE_BYTES,
+    PUBLIC,
+    RESTRICTED,
+    policy_for,
+    strip_exif,
+)
 
 
 def _jpeg_with_gps_exif():

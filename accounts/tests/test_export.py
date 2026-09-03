@@ -123,7 +123,7 @@ def test_a_shared_inquiry_exports_my_side_without_the_other_partys_contact_detai
 
 @pytest.mark.django_db
 def test_export_carries_my_pledges_stories_and_badges(client):
-    from community.models import (AccountBadge, Badge, NeedPledge, ShelterNeed, StoryPost)
+    from community.models import AccountBadge, Badge, NeedPledge, ShelterNeed, StoryPost
     account = AccountFactory()
     shelter = AccountFactory()
     need = ShelterNeed.objects.create(shelter_account=shelter, title="Dog food",

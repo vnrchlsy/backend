@@ -38,8 +38,8 @@ def _listing(poster, **kw):
     """A listing that is actually visible publicly — which needs its poster to satisfy
     `public_poster_q()` (an approved `rescuer` capability). Without it the browse hides the
     row for a reason unrelated to deletion, and the test would pass for the wrong reason."""
-    from verifications.models import AccountCapability
     from listings.models import AdoptionListing
+    from verifications.models import AccountCapability
     AccountCapability.objects.get_or_create(account=poster, capability="rescuer",
                                             defaults={"status": "approved"})
     defaults = dict(name="Bantay", species="dog", city="Marikina", adoption_fee="300.00")
@@ -194,6 +194,7 @@ def test_a_resolved_claim_does_not_block(client):
 @pytest.mark.django_db
 def test_an_upcoming_approved_shift_blocks_deletion(client):
     from datetime import timedelta
+
     from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
     volunteer, shelter = AccountFactory(), AccountFactory()
     shift = VolunteerShift.objects.create(
@@ -212,6 +213,7 @@ def test_an_upcoming_approved_shift_blocks_deletion(client):
 @pytest.mark.django_db
 def test_a_past_shift_does_not_block(client):
     from datetime import timedelta
+
     from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
     volunteer, shelter = AccountFactory(), AccountFactory()
     shift = VolunteerShift.objects.create(
@@ -257,6 +259,7 @@ def test_a_poster_with_someone_elses_active_inquiry_is_blocked_too(client):
 def test_blockers_are_listed_together_not_one_at_a_time(client):
     # Fixing one and being told about the next is the worst version of this screen.
     from datetime import timedelta
+
     from sagip.models import RescueCase
     from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
     account = AccountFactory()

@@ -1,7 +1,6 @@
 from rest_framework import serializers
 
-from sagip.models import (OfferType, ReportType, Sex, SizeCategory, Species, StrayCondition,
-                          StrayStatus)
+from sagip.models import OfferType, ReportType, Sex, SizeCategory, Species, StrayCondition, StrayStatus
 
 
 class PhotoSerializer(serializers.Serializer):

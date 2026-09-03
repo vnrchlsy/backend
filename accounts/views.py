@@ -9,15 +9,29 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from accounts.models import Account, AccountStatus
-from accounts.serializers import (AccountTokenRefreshSerializer, EmailSerializer, EmailVerifySerializer,
-                                  MeSettingsSerializer, MeUpdateSerializer, SignupSerializer, account_repr, me_repr)
+from accounts.serializers import (
+    AccountTokenRefreshSerializer,
+    EmailSerializer,
+    EmailVerifySerializer,
+    MeSettingsSerializer,
+    MeUpdateSerializer,
+    SignupSerializer,
+    account_repr,
+    me_repr,
+)
 from accounts.tokens import tokens_for
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, issue_code, verify_code
-from common.throttles import (ExportRequestThrottle, LoginIdentifierThrottle, LoginIpThrottle,
-                              OtpResendHourThrottle, OtpResendMinuteThrottle,
-                              PasswordForgotIdentifierThrottle, PasswordForgotIpThrottle,
-                              SignupIpThrottle)
+from common.throttles import (
+    ExportRequestThrottle,
+    LoginIdentifierThrottle,
+    LoginIpThrottle,
+    OtpResendHourThrottle,
+    OtpResendMinuteThrottle,
+    PasswordForgotIdentifierThrottle,
+    PasswordForgotIpThrottle,
+    SignupIpThrottle,
+)
 
 
 class SignupView(APIView):
@@ -348,8 +362,8 @@ class SocialAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, provider):
-        from accounts.models import AccountIdentity
         from accounts import social
+        from accounts.models import AccountIdentity
         if provider not in ("google", "apple"):
             return Response({"error": {"code": "unsupported_provider",
                                        "message": "That sign-in provider isn't supported"}}, status=400)

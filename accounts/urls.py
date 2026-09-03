@@ -1,9 +1,23 @@
 from django.urls import path
 
-from accounts.views import (AccountTokenRefreshView, EmailResendView, EmailVerifyView, LoginView,
-                            LogoutAllView, LogoutView, MeLocationView, MePhoneVerifyView, MePhoneView,
-                            MeExportView, MeSettingsView, MeView, PasswordForgotView, PasswordResetView, SignupView,
-                            SocialAuthView)
+from accounts.views import (
+                            AccountTokenRefreshView,
+                            EmailResendView,
+                            EmailVerifyView,
+                            LoginView,
+                            LogoutAllView,
+                            LogoutView,
+                            MeExportView,
+                            MeLocationView,
+                            MePhoneVerifyView,
+                            MePhoneView,
+                            MeSettingsView,
+                            MeView,
+                            PasswordForgotView,
+                            PasswordResetView,
+                            SignupView,
+                            SocialAuthView,
+)
 
 urlpatterns = [
     path("auth/signup", SignupView.as_view()),

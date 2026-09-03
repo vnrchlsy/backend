@@ -26,13 +26,12 @@ def _dt(value):
 
 def build_export(account):
     """The caller's data as one plain JSON-serialisable dict."""
+    from accounts.models import Address
     from community.models import AccountBadge, NeedPledge, StoryPost, StoryReaction
     from listings.models import AdoptionInquiry, AdoptionListing, Pet
     from notifications.models import Notification
-    from sagip.models import RescueCase, ReportOffer, StrayReport
+    from sagip.models import ReportOffer, RescueCase, StrayReport
     from volunteer.models import VolunteerSignup
-
-    from accounts.models import Address
 
     settings_row = account.settings
 

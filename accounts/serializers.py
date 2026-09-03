@@ -5,7 +5,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken as SimpleRefreshToken
 
-from accounts.models import Account, AccountType
+from accounts.models import Account
 
 # Canonical signup/reset password rule (dev/onboarding-validation.md §signup): min 8 chars,
 # at least one number. This is the ONLY enforcement — the AUTH_PASSWORD_VALIDATORS in settings

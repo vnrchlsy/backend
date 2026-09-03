@@ -3,19 +3,37 @@
 The `quantity_received` math and the `open -> fulfilled` flip are never done here — they go
 through `community/needs.py::apply_received` under a row lock (D-S6-7).
 """
+from django.db.models import Count
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import AccountStatus
 from common.analytics import emit
 from notifications.service import notify
 from shelter.permissions import IsShelter
 
 from .badges import impact_counts
-from .models import AccountBadge, NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from .models import (
+    AccountBadge,
+    NeedPledge,
+    NeedStatus,
+    PledgeStatus,
+    ShelterNeed,
+    StoryPhoto,
+    StoryPost,
+    StoryReaction,
+    StoryStatus,
+    StoryType,
+)
 from .needs import NeedError, apply_received
-from .serializers import (NeedCreateSerializer, NeedPatchSerializer, PledgeCreateSerializer,
-                          ReceivedSerializer)
+from .serializers import (
+    NeedCreateSerializer,
+    NeedPatchSerializer,
+    PledgeCreateSerializer,
+    ReceivedSerializer,
+    StoryCreateSerializer,
+)
 
 PAGE_SIZE = 20
 
@@ -197,11 +215,6 @@ class MeImpactView(APIView):
 
 
 # --- US-T1 · success stories ---------------------------------------------------
-from django.db.models import Count
-from accounts.models import AccountStatus
-
-from .models import StoryPost, StoryPhoto, StoryReaction, StoryStatus, StoryType
-from .serializers import StoryCreateSerializer
 
 
 def _author_city(account):

@@ -12,8 +12,17 @@ from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.service import notify
 from sagip.geo import centroid_for, coarsen_point
-from sagip.models import (MatchStatus, OfferStatus, ReportMatch, ReportOffer, ReportType,
-                          RescueCase, StrayReport, StrayReportPhoto, StrayStatus)
+from sagip.models import (
+    MatchStatus,
+    OfferStatus,
+    ReportMatch,
+    ReportOffer,
+    ReportType,
+    RescueCase,
+    StrayReport,
+    StrayReportPhoto,
+    StrayStatus,
+)
 from sagip.permissions import is_active_claimer
 from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
 from sagip.status import set_report_status
@@ -82,6 +91,7 @@ class ReportsCreateView(APIView):
         # failure must never break a welfare report submission. Inert for plain strays.
         if report.report_type in (ReportType.LOST, ReportType.FOUND):
             import logging
+
             from sagip.matching import run_matching
             try:
                 run_matching(report)

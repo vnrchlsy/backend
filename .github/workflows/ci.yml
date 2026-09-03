@@ -4,6 +4,9 @@ on:
   push:
     branches: ['**']
   pull_request:
+  # US-C2 · manual trigger, so US-E3's release rehearsal can run the pipeline on demand
+  # rather than pushing a throwaway commit to provoke it.
+  workflow_dispatch:
 
 concurrency:
   group: backend-${{ github.ref }}
@@ -55,6 +58,12 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      # §16.3 says "On PR: pytest + ruff". Runs before the tests: a lint failure is the
+      # cheapest possible answer, and waiting on a PostGIS suite to hear it wastes a minute
+      # every time. Config (and every deliberate exemption) lives in pyproject.toml.
+      - name: Lint
+        run: ruff check .
 
       # Catches a model edited without a migration — the drift that makes a green suite
       # lie about what the database will actually look like.
