@@ -78,6 +78,9 @@ INSTALLED_APPS = [
     # phished password alone must never be enough to reach gov IDs).
     "django_otp",
     "django_otp.plugins.otp_totp",
+    # US-E2 · installed so CommonConfig.ready() can start error reporting once per process.
+    # It owns no models; the analytics/observability/media/storage seams live here.
+    "common",
     "accounts",
     "verifications",
     "listings",
@@ -94,6 +97,9 @@ INSTALLED_APPS = [
 # adds the session/auth/csrf/message/clickjacking stack. DRF's APIViews are csrf_exempt
 # (they use JWT, not SessionAuthentication), so CsrfViewMiddleware does not touch the API.
 MIDDLEWARE = [
+    # US-E2 · FIRST, so every downstream log line and error envelope carries the id —
+    # including anything raised by the security/CORS middleware below it.
+    "common.observability.RequestIdMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # US-K1 · above CommonMiddleware by requirement: a CORS preflight has to be answered
     # before anything can redirect or 404 it.
@@ -283,3 +289,49 @@ FCM_CREDENTIALS_PATH = os.environ.get("FCM_CREDENTIALS_PATH", "")
 # the live boto3 path. Never commit bucket names that contain account IDs to VCS.
 MEDIA_S3_BUCKET_PUBLIC = os.environ.get("MEDIA_S3_BUCKET_PUBLIC", "")
 MEDIA_S3_BUCKET_RESTRICTED = os.environ.get("MEDIA_S3_BUCKET_RESTRICTED", "")
+
+
+# US-E2 · §16.5 observability.
+#
+# ⚠️ `common/analytics.py::emit` has written structured JSON since Sprint 6 with NO logging
+# config to route it — so every §17.2 analytics event went to Django's default handler and,
+# in a deployed process, effectively nowhere. This is that missing half.
+#
+# One JSON object per line on stdout: the shape CloudWatch Logs Insights queries, and the
+# shape a container runtime collects for free. Everything goes through the scrubber first —
+# "we only log safe things" is not a claim anyone can verify about every future log call.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {"()": "common.observability.JsonFormatter"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "json"},
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        # ⚠️ These set LEVELS ONLY and keep propagating to root, deliberately.
+        #
+        # Giving each its own handler with `propagate: False` looked tidier and was wrong
+        # twice over: it duplicates lines the day a second handler is added, and it detaches
+        # the stream from root — which silently broke the analytics tests, because a record
+        # that does not propagate never reaches a root-attached capture handler either.
+        #
+        # Routing does not need separate handlers: every line already carries its `logger`
+        # name as a queryable field, which is what a pipeline filters on.
+        "kupkop.analytics": {"level": "INFO"},
+        "django.request": {"level": "WARNING"},
+        # Django's SQL logger at DEBUG prints every query INCLUDING bound parameters, which
+        # is exactly where the PII is. Never raise this in a deployed profile.
+        "django.db.backends": {"level": "WARNING"},
+    },
+}
+
+# US-E2 · Sentry. Unset by default (the FCM/S3 seam posture): the code path is real and
+# tested, the credential is a deploy-time task. SENTRY_RELEASE is what makes an OTA bundle
+# distinguishable from the native build under it (§16.4/§16.5) — without it, a crash from an
+# over-the-air update is indistinguishable from one in the binary.
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "")
+SENTRY_ENVIRONMENT = os.environ.get("SENTRY_ENVIRONMENT", "" if DEBUG else "production")
