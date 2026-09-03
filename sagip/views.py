@@ -61,6 +61,25 @@ class ReportsCreateView(APIView):
         s = ReportCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
+
+        # US-O3 · exactly-once for the offline outbox (§13.3). A queued report is retried
+        # until it lands, and the server cannot tell a replay from a second animal by looking
+        # at the fields — two reports of the same dog, minutes apart, are legitimately
+        # identical. Returning the EXISTING row (rather than creating a second) is what stops
+        # a flaky connection from dispatching two rescuers to one animal.
+        #
+        # The lookup is scoped to the caller, so a guessed or replayed key can never hand
+        # someone another person's report — precise coordinates included (§12.5).
+        #
+        # Returned BEFORE the create block, so the replay also skips every side effect:
+        # no second matcher run (US-L2), no duplicate reunion push, no repeated analytics.
+        idem = d.get("idempotency_key")
+        if idem:
+            existing = StrayReport.objects.filter(
+                reporter_account=request.user, idempotency_key=idem).first()
+            if existing is not None:
+                return Response({"report_id": str(existing.report_id),
+                                 "status": existing.status}, status=200)
         # US-L1 · describable fields (lost/found). A pet_id the caller owns prefills any the
         # caller left blank — but the values are STORED on the report (D-S6-1), so a later pet
         # edit can't rewrite what was reported. Ownership-checked: another user's pet is ignored.
@@ -84,7 +103,8 @@ class ReportsCreateView(APIView):
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
                 city=(d.get("city") or "").strip() or None,   # client-resolved city label, or NULL
-                status="reported", escalation_level=0, **describables)
+                status="reported", escalation_level=0,
+                idempotency_key=idem or None, **describables)
             for photo in d.get("photos", []):
                 StrayReportPhoto.objects.create(report=report, url=photo["file_url"])
         # US-L2 · a new lost/found report triggers matching (§11). Best-effort: a matcher
