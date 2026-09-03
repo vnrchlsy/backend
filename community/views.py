@@ -198,6 +198,7 @@ class MeImpactView(APIView):
 
 # --- US-T1 · success stories ---------------------------------------------------
 from django.db.models import Count
+from accounts.models import AccountStatus
 
 from .models import StoryPost, StoryPhoto, StoryReaction, StoryStatus, StoryType
 from .serializers import StoryCreateSerializer
@@ -229,7 +230,10 @@ class StoriesView(APIView):
         return [IsAuthenticated()] if self.request.method == "POST" else [AllowAny()]
 
     def get(self, request):
+        # US-N1 · the feed drops a deleted author's stories (the rows survive for the
+        # welfare record; the public surface does not show them).
         qs = (StoryPost.objects.filter(status=StoryStatus.PUBLISHED)
+              .exclude(author_account__status=AccountStatus.DELETED)
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
               .annotate(_rcount=Count("reactions")).order_by("-created_at"))

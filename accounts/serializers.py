@@ -80,6 +80,10 @@ class MeSettingsSerializer(serializers.Serializer):
     approximate_location = serializers.BooleanField(required=False)
     masked_contact = serializers.BooleanField(required=False)
     push_enabled = serializers.BooleanField(required=False)
+    # D-S7-3 · analytics_consent_at is NOT accepted from the client: the timestamp is the
+    # controller's record of when consent was given, so the server stamps it. A client that
+    # could set it could backdate its own consent.
+    analytics_consent = serializers.BooleanField(required=False)
 
 
 class EmailVerifySerializer(serializers.Serializer):

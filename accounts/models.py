@@ -78,6 +78,10 @@ class Account(models.Model):
     # deleted_at: opens the §12.7 soft-delete grace window. Moves in lockstep with
     # status='deleted' — enforced below by the M5 CHECK, not by convention.
     deleted_at = models.DateTimeField(null=True, blank=True)
+    # anonymized_at: CLOSES that window (D-S7-1). NULL = never purged, i.e. either active or
+    # soft-deleted and still inside the grace period. Set once, by the purge sweep, which is
+    # what makes the sweep idempotent — it skips rows already stamped.
+    anonymized_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -137,6 +141,15 @@ class AccountSettings(models.Model):
     approximate_location = models.BooleanField(default=True)
     masked_contact = models.BooleanField(default=True)
     push_enabled = models.BooleanField(default=True)
+    # D-S7-3 · opt-in consent for CLIENT-SIDE / behavioural analytics only. The
+    # server-authoritative aggregate events (common/analytics.py::emit, US-Y1) carry no
+    # account identifiers and keep flowing regardless — that is why §17's tooling note says
+    # they need no consent. Default false: silence is not consent under RA 10173.
+    analytics_consent = models.BooleanField(default=False)
+    # §12.6 puts the burden on the controller to DEMONSTRATE consent, which a bare boolean
+    # cannot do — it cannot say WHEN. Cleared on withdrawal so the column always describes
+    # the consent that is currently in force, never a lapsed one.
+    analytics_consent_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

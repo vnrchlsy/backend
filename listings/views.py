@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account, Address
+from accounts.models import Account, Address, AccountStatus
 from listings.fees import fee_cap_for
 from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
                              AdoptionStage, AdoptionStageKey, InquiryStatus, ListingStatus,
@@ -101,7 +101,9 @@ class ListingsView(APIView):
                   .order_by("-created_at"))
             page_items, next_page = _paginate(qs, request)
             return Response({"results": [_card(l) for l in page_items], "next": next_page})
+        # US-N1 · a deleted account's listings leave every public surface at once.
         qs = (AdoptionListing.objects.filter(status="available")
+              .exclude(posted_by__status=AccountStatus.DELETED)
               .filter(public_poster_q()).distinct().order_by("-created_at"))
         city = request.query_params.get("city")
         if city:
