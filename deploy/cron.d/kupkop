@@ -14,3 +14,11 @@ SHELL=/bin/bash
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
 # 02:00 UTC = 10:00 PHT; low-traffic window.
 0 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
+
+# Nightly account purge — RA 10173 erasure (§12.7, US-N2)
+# Anonymizes soft-deleted accounts in place once the 30-day grace window closes: the PII is
+# scrubbed, the welfare record (rescues, adoptions, shifts) survives attached to the same row.
+# Its own entry rather than part of run_sweeps because it is IRREVERSIBLE — a change to sweep
+# cadence must never quietly change how fast personal data is destroyed.
+# 02:30 UTC = 10:30 PHT; after the document purge, same low-traffic window.
+30 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_deleted_accounts >> /var/log/kupkop/purge.log 2>&1

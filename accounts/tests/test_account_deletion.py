@@ -155,7 +155,7 @@ def test_signing_up_again_with_a_deleted_address_is_refused_cleanly_not_with_a_5
 
     res = client.post("/api/v1/auth/signup",
                       {"email": "returning@kupkop.ph", "password": "Str0ng!passw0rd",
-                       "display_name": "Back Again", "account_type": "owner",
+                       "display_name": "Back Again", "account_type": "personal",
                        "terms_consent": True},
                       content_type="application/json")
 

@@ -155,6 +155,12 @@ OTP_TOTP_ISSUER = "Kupkop PH Admin"
 # verification_document.file_url is nulled; the row itself (and the decision) survives.
 DOCUMENT_RETENTION_DAYS = 90
 
+# US-N2 / D-S7-1 · how long a soft-deleted account keeps its data before the purge sweep
+# anonymises it irreversibly (§12.7's "grace + purge"). Read at sweep time and never stored
+# on the row, so changing this changes the promise for everyone at once — which is exactly
+# why it must match what the privacy policy states. The screen says "30 days".
+ACCOUNT_PURGE_GRACE_DAYS = 30
+
 # US-P2 · FCM push send seam — unset by default (no-op sender, nothing sent). Set both
 # to enable the live FCM HTTP v1 transport in notifications/push.py. Never commit a
 # real credentials path/secret here — supply via environment at deploy time.
