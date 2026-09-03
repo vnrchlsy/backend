@@ -2,14 +2,61 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-insecure-key-change-me-in-production-0123456789")
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
-ALLOWED_HOSTS = ["*"]
+# US-K1 · §12.4 deployment posture.
+#
+# DEBUG DEFAULTS TO **OFF**. It used to default on, which is the wrong way round for
+# anything that ships: a deploy that forgets to set the variable would serve tracebacks and
+# a full settings dump to the public. Local work opts IN (`.env.example` sets it), because
+# forgetting it locally costs you a confusing afternoon while forgetting it in production
+# costs you the secret key.
+DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+
+
+def _secret_key_for(debug, env_value):
+    """The signing key, or a hard failure.
+
+    There is no committed fallback any more. A default key in version control signs every
+    session and JWT with a value anyone can read out of the repository, and the failure is
+    silent — everything works, and it is all forgeable. Deployments must supply one; local
+    work gets a throwaway that is obviously not a secret.
+    """
+    if env_value:
+        return env_value
+    if debug:
+        return "dev-only-insecure-key-not-for-deployment"
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set when DEBUG is off. Generate one with: "
+        "python -c 'from django.core.management.utils import get_random_secret_key as k; print(k())'")
+
+
+def _allowed_hosts_for(debug, env_value):
+    """The Host allowlist, or a hard failure.
+
+    `["*"]` disables Django's Host-header validation entirely, which is what lets an
+    attacker poison caches and password-reset links with a Host of their choosing. A
+    wildcard is refused even when the environment explicitly asks for one — that request is
+    always someone unblocking a deploy rather than making a decision.
+    """
+    hosts = [h.strip() for h in env_value.split(",") if h.strip()]
+    if "*" in hosts:
+        raise ImproperlyConfigured(
+            "DJANGO_ALLOWED_HOSTS must name real hosts — '*' disables Host validation.")
+    if hosts:
+        return hosts
+    if debug:
+        return ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "testserver"]
+    raise ImproperlyConfigured(
+        "DJANGO_ALLOWED_HOSTS must be set when DEBUG is off (e.g. 'api.kupkop.ph').")
+
+
+SECRET_KEY = _secret_key_for(DEBUG, os.environ.get("DJANGO_SECRET_KEY", ""))
+ALLOWED_HOSTS = _allowed_hosts_for(DEBUG, os.environ.get("DJANGO_ALLOWED_HOSTS", ""))
 
 # The platform ops surface (US-R1) runs on the built-in Django admin: staff (Kupkop
 # reviewers) authenticate against contrib.auth.User over a web SESSION — deliberately
@@ -23,6 +70,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.gis",   # Sagip (US-S1) uses PostGIS: PointField + spatial queries
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     # US-SEC3 · TOTP for the Django admin. django_otp's own migrations create the device
@@ -47,6 +95,9 @@ INSTALLED_APPS = [
 # (they use JWT, not SessionAuthentication), so CsrfViewMiddleware does not touch the API.
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # US-K1 · above CommonMiddleware by requirement: a CORS preflight has to be answered
+    # before anything can redirect or 404 it.
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -110,6 +161,11 @@ REST_FRAMEWORK = {
         "report_create": "20/day", "offer_create": "20/hour",
         "moderation_flag_create": "20/day",
         "export_request": "3/day",
+        # US-K2 · ceilings for the Sprint 4-6 write paths. Sized so no plausible
+        # human hits them: a shelter posting a dozen needs or a donor pledging to
+        # several at once stays well clear, while a script does not.
+        "media_presign": "60/hour", "story_create": "10/hour",
+        "need_create": "30/day", "pledge_create": "30/day",
     },
     "EXCEPTION_HANDLER": "common.errors.error_handler",
 }
@@ -119,8 +175,21 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
-    "USER_ID_FIELD": "account_id",
-    "USER_ID_CLAIM": "account_id",
+    # ⚠️ USER_ID_FIELD / USER_ID_CLAIM are deliberately NOT set (US-K3).
+    #
+    # They tell SimpleJWT how to map a token claim onto `AUTH_USER_MODEL` — which here is
+    # Django's `auth.User` (the staff/admin identity), NOT `Account`. This app never uses
+    # that mapping: `accounts/tokens.py::tokens_for` writes the `account_id` claim itself,
+    # and `accounts/authentication.py` reads it and resolves an `Account` directly.
+    #
+    # Setting them to "account_id" was harmless on 5.3.1 and became a bug on 5.5.1, where
+    # `TokenRefreshSerializer.validate` gained a
+    # `get_user_model().objects.get(**{USER_ID_FIELD: claim})` lookup — i.e. it started
+    # asking the `auth_user` table for a column it has never had, and every refresh raised
+    # FieldError. Left at their defaults, SimpleJWT looks for a `user_id` claim, our tokens
+    # carry none, and it correctly skips a lookup that was never meaningful. The real check
+    # (does this Account exist, are its sessions revoked) lives in
+    # `AccountTokenRefreshSerializer` and is unaffected.
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -139,15 +208,57 @@ TERMS_VERSION = "2026-08-01"
 # written before Kawang-Gawa reaches real volunteers (a launch blocker for M3).
 WAIVER_VERSION = "2026-08-24"
 
-# US-SEC3 · session hardening for the reviewer surface. Gated on DEBUG rather than
-# hardcoded true: the *_SECURE flags require HTTPS to even set the cookie, which the
-# local/dev/test runserver never serves — hardcoding them would silently break every
-# admin session (and every admin_client-based test) outside of a TLS-terminated deploy.
-# SESSION_COOKIE_AGE is short because the only session-cookie consumer in this app is
-# the staff admin (the mobile/API surface is JWT-only, see the INSTALLED_APPS note above).
+# US-SEC3 / US-K1 · session hardening + the §12.4 transport posture.
+#
+# Everything HTTPS-dependent is gated on `not DEBUG`: these flags need TLS to work at all,
+# and a local runserver serves plain http — hardcoding them on would make an admin login
+# locally impossible. `manage.py check --deploy` (asserted in
+# config/tests/test_deploy_readiness.py) is what stops that gate from hiding a real gap.
+#
+# SESSION_COOKIE_AGE is short because the only session-cookie consumer in this app is the
+# staff admin; the mobile/API surface is JWT-only (see the INSTALLED_APPS note above).
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_AGE = 3600  # 1 hour
+SESSION_COOKIE_HTTPONLY = True          # the admin session is never read by script
+CSRF_COOKIE_HTTPONLY = False            # Django's own CSRF flow reads this one
+
+# Redirect http -> https at the edge. Off in DEBUG or every local request would bounce to a
+# port that isn't listening.
+SECURE_SSL_REDIRECT = not DEBUG
+# Behind an ALB/CloudFront the app sees http; this header is how it learns the request
+# actually arrived over TLS. Safe because only the load balancer can set it.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# HSTS: one year, subdomains included, preload-eligible. Set unconditionally — the header is
+# only ever emitted on a secure request, so it is inert locally.
+# ⚠️ Preload is close to irreversible (removal from the browser list takes months). It is
+# correct here because kupkop.ph is https-only by design, but do not copy it to a domain
+# that still serves anything over http.
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+
+SECURE_CONTENT_TYPE_NOSNIFF = True      # no MIME sniffing on user-uploaded media
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"                # the admin must never be framed (clickjacking)
+
+# §12.4 · "reject oversized payloads". common/media.py caps the presigned OBJECT, but the
+# request BODY was uncapped, so an oversized POST was parsed into memory before any view
+# ran. 5 MB is generous for this API — every real payload is JSON; images go direct to S3
+# through a presigned URL and never traverse the app.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
+
+# §12.4 · "strict CORS allowlist". Deliberately EMPTY by default: the mobile client is a
+# native app, not a browser origin, so it sends no Origin header and needs nothing here.
+# Only a real web surface (an admin SPA, a marketing page calling the API) belongs on this
+# list, added by hostname via the environment. CORS_ALLOW_ALL_ORIGINS is never set — it
+# would hand every site on the internet the ability to make credentialed reads.
+CORS_ALLOWED_ORIGINS = [o.strip() for o in
+                        os.environ.get("DJANGO_CORS_ORIGINS", "").split(",") if o.strip()]
+CORS_ALLOW_CREDENTIALS = False
 OTP_TOTP_ISSUER = "Kupkop PH Admin"
 
 # US-SEC4 · RA 10173 data minimization — decided 2026-08-23: identity documents are kept

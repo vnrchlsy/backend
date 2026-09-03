@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from common.media import policy_for
 from common.storage import create_presigned_upload
+from common.throttles import MediaPresignThrottle
 from verifications.models import AccountCapability, VerificationDocument, VerificationRequest
 from verifications.rules import MIN_RESCUE_PHOTOS, base_complete, missing_docs, required_doc_types
 from verifications.serializers import PresignSerializer, VerificationSerializer
@@ -106,6 +107,7 @@ class PresignView(APIView):
     bucket configured (the current dev slice) still returns real `example.invalid`
     placeholders, same shape as before this story."""
     permission_classes = [IsAuthenticated]
+    throttle_classes = [MediaPresignThrottle]   # US-K2 · upload credentials, per account
 
     def post(self, request):
         s = PresignSerializer(data=request.data)

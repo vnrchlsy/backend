@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from accounts.models import AccountStatus
 from common.analytics import emit
+from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
 from shelter.permissions import IsShelter
 
@@ -53,6 +54,11 @@ class ShelterNeedsView(APIView):
 
     def get_permissions(self):
         return [IsShelter()] if self.request.method == "POST" else [AllowAny()]
+
+    def get_throttles(self):
+        # US-K2 · the WRITE is rate-limited; the public read is not. A class-level
+        # throttle_classes would have quietly rationed the feed everyone browses.
+        return [NeedCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, account_id):
         qs = ShelterNeed.objects.filter(shelter_account_id=account_id)
@@ -102,6 +108,9 @@ class NeedPledgesView(APIView):
 
     def get_permissions(self):
         return [IsShelter()] if self.request.method == "GET" else [IsAuthenticated()]
+
+    def get_throttles(self):
+        return [PledgeCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, need_id):
         need = ShelterNeed.objects.filter(pk=need_id).first()
@@ -241,6 +250,9 @@ class StoriesView(APIView):
 
     def get_permissions(self):
         return [IsAuthenticated()] if self.request.method == "POST" else [AllowAny()]
+
+    def get_throttles(self):
+        return [StoryCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request):
         # US-N1 · the feed drops a deleted author's stories (the rows survive for the

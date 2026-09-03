@@ -93,3 +93,25 @@ class ExportRequestThrottle(AccountScopedThrottle):
     """US-N3 · the widest authenticated read in the app, and a free amplification primitive
     if left open. Pinned low on purpose: portability is a right people exercise rarely."""
     scope = "export_request"
+
+
+# --- US-K2 · the write paths Sprints 4-6 added without a scope (§12.4) ----------------
+class MediaPresignThrottle(AccountScopedThrottle):
+    """Presign hands out upload credentials. Unthrottled it is free storage for anyone with
+    an account, and the cheapest amplification primitive in the API."""
+    scope = "media_presign"
+
+
+class StoryCreateThrottle(AccountScopedThrottle):
+    """The newest public UGC surface. Unthrottled UGC is a spam feed."""
+    scope = "story_create"
+
+
+class NeedCreateThrottle(AccountScopedThrottle):
+    scope = "need_create"
+
+
+class PledgeCreateThrottle(AccountScopedThrottle):
+    """A pledge is a promise a shelter plans around — a flood of them is a denial of service
+    against a shelter's ability to plan, not just noise."""
+    scope = "pledge_create"
