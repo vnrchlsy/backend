@@ -69,6 +69,15 @@ class Account(models.Model):
     sessions_revoked_at = models.DateTimeField(null=True, blank=True)  # logout-all / password reset set this; tokens with iat before it are rejected
     status = models.CharField(max_length=20, choices=AccountStatus.choices,
                               default=AccountStatus.ACTIVE)
+    # US-C1 · both columns have been in the documented DDL since the data-analyst review
+    # and in NO model or migration until now — table-level drift checking could not see
+    # it (the D-S5-1 blind spot; check-docs now compares columns too).
+    # last_active_at: retention/inactive-account policy input (§12.6). Never a login side
+    # effect that writes on every request — whoever starts using it decides the cadence.
+    last_active_at = models.DateTimeField(null=True, blank=True)
+    # deleted_at: opens the §12.7 soft-delete grace window. Moves in lockstep with
+    # status='deleted' — enforced below by the M5 CHECK, not by convention.
+    deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,6 +88,17 @@ class Account(models.Model):
 
     class Meta:
         db_table = "account"
+        constraints = [
+            # M5 (root DDL): a soft delete is two facts that must never disagree — a
+            # status of 'deleted' with no deleted_at has no grace window to expire, and a
+            # deleted_at on an active account would make the purge sweep eat a live user.
+            # Postgres enforces the pair; application code cannot set one without the other.
+            models.CheckConstraint(
+                condition=models.Q(deleted_at__isnull=False, status=AccountStatus.DELETED)
+                | models.Q(deleted_at__isnull=True) & ~models.Q(status=AccountStatus.DELETED),
+                name="chk_account_deleted_consistency",
+            ),
+        ]
 
     def set_password(self, raw):
         self.password_hash = make_password(raw)
