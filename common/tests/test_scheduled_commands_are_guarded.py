@@ -33,12 +33,13 @@ def test_the_crontab_is_where_we_think_it_is():
     # ZERO cases and pass — a guard that guards nothing, which is the failure this whole
     # story is about.
     assert os.path.exists(CRONTAB), CRONTAB
-    assert len(scheduled_commands()) >= 3, scheduled_commands()
+    assert len(scheduled_commands()) >= 4, scheduled_commands()
 
 
 @pytest.mark.parametrize("name", scheduled_commands())
 def test_every_scheduled_command_refuses_to_run_twice_at_once(name):
-    app = {"run_sweeps": "sagip", "purge_deleted_accounts": "accounts",
+    app = {"run_sweeps": "sagip", "run_matching_sweep": "sagip",
+           "purge_deleted_accounts": "accounts",
            "purge_expired_documents": "verifications"}.get(name)
     assert app, (f"'{name}' is scheduled in deploy/cron.d/kupkop but this test does not know "
                  "which app owns it — add it here, and give it a SingletonCommand base.")

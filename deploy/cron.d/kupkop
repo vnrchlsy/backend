@@ -20,8 +20,26 @@ SHELL=/bin/bash
 # 50,000 reports (37x the time for 10x the data). That fits an hourly slot today with ~5x
 # of margin and stops fitting after the next 10x of growth.
 
-# Hourly sweeps: stray escalation, stalled claims, expired offers, shift reminders (US-F0/E1/E2/N2/V7)
+# Hourly sweeps: stray escalation, stalled claims, expired offers, shift reminders, badges
+# (US-F0/E1/E2/N2/V7/B1). Everything here is time-sensitive to welfare — a sweep belongs on
+# this line only if a one-hour delay would hurt someone. Matching does not qualify (above).
 0 * * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_sweeps >> /var/log/kupkop/sweeps.log 2>&1
+
+# §11.4's NIGHTLY lost<->found matching safety net (US-Q2 follow-up).
+# Split out of run_sweeps, where it had been running hourly — 24x what §11.4 asks. It is the
+# SAFETY NET, not the matcher: a lost/found report is scanned synchronously when it is filed
+# (sagip/views.py), so nobody's reunion waits on this. What it adds is a re-score of still-open
+# reports, catching a pair that was a near miss before somebody added a breed.
+# ⚠️ US-Q2 measured it at 11.5 minutes over 50,000 reports (37x the time for 10x the data), so
+# it is also the one scheduled job heavy enough for its slot to matter.
+#
+# 18:20 UTC = 02:20 PHT — the actual overnight trough for a Metro Manila userbase.
+# ⚠️ NOTE THE CONTRAST WITH THE TWO PURGE ENTRIES BELOW, which are commented "low-traffic
+# window" but run at 10:00/10:30 PHT — mid-morning. The arithmetic in those comments is right
+# (UTC+8) and the conclusion is not; they read as though 02:00 UTC were local night. They are
+# left alone here ON PURPOSE: they govern irreversible personal-data deletion, and moving that
+# schedule is an owner's decision, not a performance tweak. Worth deciding deliberately.
+20 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_matching_sweep >> /var/log/kupkop/sweeps.log 2>&1
 
 # Nightly document retention purge — RA 10173 data minimization (US-SEC4)
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.

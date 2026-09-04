@@ -19,17 +19,24 @@ instead. See common/locks.py for why it is a database advisory lock and not `flo
 """
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
-from sagip.matching import sweep_matches
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
 from volunteer.sweeps import remind_shifts
 
 # (label, callable) — each returns a list of the rows it touched.
+#
+# ⚠️ `sweep_matches` used to be here and is now `manage.py run_matching_sweep` on its own
+# NIGHTLY entry. Everything left in this list is time-sensitive to welfare and belongs on the
+# hourly tick: an injured stray escalating, a claim going stale, an offer expiring, a shift
+# reminder. §11.4 asks for the matching safety net *nightly*, and US-Q2 measured it at 11.5
+# minutes over 50,000 reports — so hourly meant 11.5 minutes of database load every hour,
+# competing with the reads §13.1 budgets, for a job the spec wants once a night.
+#
+# The rule this encodes: a sweep joins this list only if a one-hour delay would hurt someone.
 SWEEPS = [
     ("escalated", escalate_reports),
     ("expired", expire_stalled_claims),
     ("reminded", remind_shifts),
     ("badged", award_badges),
-    ("matched", sweep_matches),
 ]
 
 

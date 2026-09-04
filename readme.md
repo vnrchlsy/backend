@@ -265,11 +265,12 @@ TEST_DATABASE_NAME=kupkop_test
 
 ## Scheduled tasks
 
-Three management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
+Four management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
 
 | Command | Frequency | Purpose |
 |---|---|---|
-| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders (US-F0/E1/E2/N2/V7) |
+| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders, badges (US-F0/E1/E2/N2/V7/B1) |
+| `run_matching_sweep` | Nightly 18:20 UTC | §11.4's lost↔found **safety net** — re-score still-open reports so a near miss gets another look (US-L2) |
 | `purge_expired_documents` | Nightly 02:00 UTC | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
 | `purge_deleted_accounts` | Nightly 02:30 UTC | RA 10173 erasure — anonymize soft-deleted accounts in place once the 30-day grace window closes (US-N2, §12.7) |
 
@@ -277,11 +278,16 @@ Quick-start (development):
 
 ```bash
 .venv/bin/python manage.py run_sweeps
+.venv/bin/python manage.py run_matching_sweep
 .venv/bin/python manage.py purge_expired_documents
 .venv/bin/python manage.py purge_deleted_accounts
 ```
 
-The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). All three commands are idempotent — safe to run more frequently than scheduled during testing.
+The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Every command is idempotent — safe to run more often than scheduled during testing.
+
+⚠️ **All four refuse to run twice at once** (US-Q2 follow-up). Each subclasses `SingletonCommand` (`common/management_base.py`) and takes a Postgres advisory lock named after itself; if the previous run is still going, the next logs a skip and exits 0. It is a database lock rather than `flock` because §16.1 runs 1–2 Fargate tasks, and a file lock guards one host while *looking* in the crontab exactly as though it guards both.
+
+⚠️ `run_matching_sweep` is **§11.4's safety net, not the matcher.** A lost/found report is scanned synchronously when it is filed, so nobody's reunion waits on this job — which is why it can be nightly. It was inside `run_sweeps` (hourly, 24× what §11.4 asks) until US-Q2 measured it at **11.5 minutes over 50,000 reports**: 11.5 minutes of database load every hour, competing with the reads §13.1 budgets. A sweep belongs in `run_sweeps` only if a one-hour delay would hurt someone.
 
 ⚠️ The two `purge_*` commands are **irreversible** and deliberately live outside `run_sweeps`: retention deletion should be schedulable, and auditable, independently of the routine hourly sweeps.
 
