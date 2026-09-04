@@ -10,9 +10,14 @@ Celery-beat) still stands, and D-S5-6 reconfirmed it for push.
 ⚠️ `purge_expired_documents` (US-SEC4) stays its own command deliberately: retention
 deletion is destructive and should be schedulable — and auditable — independently of the
 routine hourly sweeps.
-"""
-from django.core.management.base import BaseCommand
 
+⚠️ SingletonCommand, not BaseCommand (US-Q2 follow-up). US-Q2 measured `sweep_matches` at
+11.5 minutes over 50,000 reports — 37x the time for 10x the data. Against an HOURLY cron
+that fits today with ~5x of margin and stops fitting after the next 10x of growth, at which
+point two of these run concurrently forever. A held lock makes the second tick a no-op
+instead. See common/locks.py for why it is a database advisory lock and not `flock`.
+"""
+from common.management_base import SingletonCommand
 from community.sweeps import award_badges
 from sagip.matching import sweep_matches
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
@@ -28,10 +33,10 @@ SWEEPS = [
 ]
 
 
-class Command(BaseCommand):
+class Command(SingletonCommand):
     help = "Run every scheduled sweep: escalation, stalled claims, offer expiry, shift reminders."
 
-    def handle(self, *args, **options):
+    def run(self, *args, **options):
         parts = [f"{label} {len(fn())}" for label, fn in SWEEPS]
         # expire_offers returns a count, not a list — kept separate rather than forcing a
         # uniform return type on a sweep that has no rows worth handing back.

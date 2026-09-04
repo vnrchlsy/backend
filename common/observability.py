@@ -97,16 +97,28 @@ def scrub(value, _depth: int = 0):
 class JsonFormatter(logging.Formatter):
     """One JSON object per line — the shape CloudWatch Logs Insights can query (§16.5).
 
-    An analytics payload that is already JSON is NESTED rather than embedded as a string, so
-    a pipeline can filter on `message.event` instead of re-parsing a quoted blob.
+    A payload that is already structured is NESTED rather than embedded as a string, so a
+    pipeline can filter on `message.event` instead of re-parsing a quoted blob. Two forms
+    count as structured, and the second was a real bug:
+
+      * a JSON string — what `common/analytics.py::emit` writes;
+      * a dict passed straight to the logger, `logger.warning({"event": ...})`, which is the
+        natural way to log structured data in Python. `record.getMessage()` renders that with
+        `str()`, so it arrived as Python REPR — single quotes, `None` for `null` — which
+        begins with `{` and so reads like JSON to a human while failing every parser. That
+        defeats the entire purpose of §16.5 while looking exactly as though it works. Caught
+        by reading a real line out of the overlap guard, not by a test of this class.
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        raw = record.getMessage()
-        try:
-            message = json.loads(raw) if raw.startswith("{") else raw
-        except ValueError:
-            message = raw
+        if isinstance(record.msg, dict) and not record.args:
+            message = record.msg
+        else:
+            raw = record.getMessage()
+            try:
+                message = json.loads(raw) if raw.startswith("{") else raw
+            except ValueError:
+                message = raw
 
         payload = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),

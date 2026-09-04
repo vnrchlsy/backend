@@ -23,7 +23,7 @@ import logging
 
 import pytest
 
-from common.observability import request_id_var, scrub
+from common.observability import JsonFormatter, request_id_var, scrub
 
 
 class TestScrubbing:
@@ -153,3 +153,33 @@ def test_sentry_is_a_no_op_until_it_is_configured(settings):
 
     settings.SENTRY_DSN = ""
     assert init_sentry() is False
+
+
+def test_a_dict_logged_directly_is_nested_not_repr_ed():
+    """`logger.warning({"event": ...})` is the natural way to log structured data, and it
+    was silently producing an UNPARSEABLE line.
+
+    `record.getMessage()` renders a dict with `str()`, so the payload arrived as Python
+    repr — single quotes, `None` instead of `null` — which starts with `{` and therefore
+    looks like JSON to a reader while failing every JSON parser. The whole point of §16.5's
+    structured logging is that a pipeline can filter on `message.event`; a repr blob defeats
+    that while looking exactly like it works. Found by reading a real log line from the
+    overlap guard, not by a test of the formatter.
+    """
+    record = logging.LogRecord("kupkop.locks", logging.WARNING, __file__, 1,
+                               {"event": "scheduled_run_skipped", "command": "run_sweeps"},
+                               None, None)
+    line = json.loads(JsonFormatter().format(record))
+    assert line["message"] == {"event": "scheduled_run_skipped", "command": "run_sweeps"}
+
+
+def test_a_logged_dict_is_scrubbed_like_everything_else():
+    # A dict is the easiest way to log a whole object by accident; it must not become the
+    # one path into the log stream that skips redaction.
+    record = logging.LogRecord("kupkop.x", logging.INFO, __file__, 1,
+                               {"email": "ana@example.ph", "lat": 14.6, "species": "dog"},
+                               None, None)
+    line = json.loads(JsonFormatter().format(record))
+    assert line["message"]["email"] == "[redacted]"
+    assert line["message"]["lat"] == "[redacted]"
+    assert line["message"]["species"] == "dog"

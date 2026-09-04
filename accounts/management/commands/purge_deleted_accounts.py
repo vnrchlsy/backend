@@ -8,14 +8,13 @@ schedulable — and auditable — separately from the routine hourly sweeps, so 
 sweep cadence can never quietly change how fast personal data is destroyed. Cron it beside
 the other two (US-F0's cron-over-Celery decision).
 """
-from django.core.management.base import BaseCommand
-
 from accounts.purge import anonymize_expired_accounts
+from common.management_base import SingletonCommand
 
 
-class Command(BaseCommand):
+class Command(SingletonCommand):
     help = "Anonymize accounts whose post-deletion grace window has closed (RA 10173, §12.7)."
 
-    def handle(self, *args, **options):
+    def run(self, *args, **options):
         purged = anonymize_expired_accounts()
         self.stdout.write(self.style.SUCCESS(f"anonymized {len(purged)} account(s)"))
