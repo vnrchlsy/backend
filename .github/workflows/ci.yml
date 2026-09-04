@@ -7,6 +7,14 @@ on:
   # US-C2 · manual trigger, so US-E3's release rehearsal can run the pipeline on demand
   # rather than pushing a throwaway commit to provoke it.
   workflow_dispatch:
+    inputs:
+      smoke_url:
+        description: >-
+          US-E3 · base URL of a DEPLOYED backend to smoke-test after the suite
+          (e.g. https://api.kupkop.ph). Leave blank to skip — there is no deployed
+          environment yet, so blank is the honest default rather than a failing job.
+        required: false
+        default: ''
 
 concurrency:
   group: backend-${{ github.ref }}
@@ -116,3 +124,15 @@ jobs:
           name: coverage-json
           path: coverage.json
           if-no-files-found: ignore
+
+      # US-E3 · §16.6's "staging smoke suite green". Runs ONLY when a URL is supplied,
+      # because a job that fails for want of an environment teaches everyone to ignore a
+      # red pipeline — which is a worse outcome than not having the check.
+      #
+      # This proves things pytest structurally cannot: that THIS DEPLOYMENT has DEBUG off,
+      # emits §12.4's headers through whatever proxy sits in front of it, has a reachable
+      # cache backend (so throttling is real and not silently disabled), and does not leak
+      # a precise coordinate on the public map.
+      - name: Post-deploy smoke suite
+        if: inputs.smoke_url != ''
+        run: python dev/smoke.py "${{ inputs.smoke_url }}"
