@@ -249,6 +249,23 @@ TEST_DATABASE_NAME=kupkop_test
 
 ---
 
+## Icon-cruft hook (opt-in, one line)
+
+Google Drive's Mirror sync (`team.kupkopph@gmail.com`) periodically re-creates zero-byte
+macOS Finder `Icon\r` files inside `.git/`, and git then fails `fetch`/`pull` with
+`bad object refs/Icon?`. The repo carries `.githooks/purge-icon-cruft` and a `pre-commit`
+that calls it — the `-size 0` guard makes it safe (no real ref, object or reflog is ever
+zero-byte). Enable it in your clone with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Silent on the happy path; prints one line when it actually purges something so the
+recurrence rate stays observable. See `../dev/HANDOFF.md` for the underlying issue.
+
+---
+
 ## Gotchas & conventions
 
 - **Python 3.12, not 3.14.** The pins don't build cleanly on 3.14; always create the venv with 3.12.
