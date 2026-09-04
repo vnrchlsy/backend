@@ -306,8 +306,16 @@ These are intentional for the Sprint-1 slice — implemented as clean stubs or s
   on the developer-program credentials (sprint-0 S0-05/S0-06), not on code** — the mobile side has a
   matching seam. ⚠️ Apple sign-in is an App Store 4.8 requirement. (Facebook is Phase 2 — it can omit
   email, which the endpoint rejects with `400 email_required`.)
-- **Real email/SMS delivery** — swap `common.senders.ConsoleSender` for a provider behind the same
-  `Sender` interface.
+- **Real email delivery** — the code seam is done (`common.senders.SesEmailSender`, Amazon SES via
+  boto3). Set `EMAIL_PROVIDER=ses`, `EMAIL_FROM=<verified identity>`, `AWS_SES_REGION=<region>` in
+  the deployed env; unset in dev keeps the `ConsoleSender` and its `[DEV OTP]` stdout print. Owner
+  actions still needed: open the AWS account, verify a sending identity (an address for a smoke
+  test, then the sending domain with DKIM), and request production access — SES starts in a
+  *sandbox* that only mails verified recipients, so every real signup fails until that ticket is
+  approved. §16.6 gate 3.
+- **Real SMS delivery** — still `ConsoleSender`; waits on the Semaphore/Movider account named in
+  §16.6 gate 3. `SesEmailSender` deliberately delegates `channel="sms"` to the fallback so a mixed
+  configuration doesn't ship SMS OTPs through email.
 - **Object storage** — `POST /media/presign` returns a placeholder; wire access-restricted S3.
 - **PostGIS** — `address.geom` is modeled as nullable text; reconcile to a real `geography(Point)` in
   Sprint 2, when `stray_report` (Sagip) needs real proximity queries.

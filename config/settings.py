@@ -206,6 +206,22 @@ SIMPLE_JWT = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "static/"
 OTP_TTL_MINUTES = 5
+
+# US-D1 · transactional email provider seam. Real code path, credential-guarded, silent
+# dev fallback — same posture as `SENTRY_DSN` below, `MEDIA_S3_BUCKET_*` above, and the
+# push seam. `common/senders.py` picks a backend from these:
+#
+#   EMAIL_PROVIDER unset / empty   → ConsoleSender (dev: `[DEV OTP]` prints to stdout).
+#   EMAIL_PROVIDER=ses             → SesEmailSender; requires EMAIL_FROM + AWS_SES_REGION,
+#                                    else settings refuse to load (loud fail on partial
+#                                    config, same stance as SECRET_KEY when DEBUG is off).
+#
+# ⚠️ Owner actions this code cannot do: opening an AWS account, verifying `EMAIL_FROM`
+# with SES, and requesting production access (SES starts in a sandbox that only mails
+# verified addresses — every real signup fails until the ticket is approved). §16.6 gate 3.
+EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
+AWS_SES_REGION = os.environ.get("AWS_SES_REGION", "")
 OTP_MAX_ATTEMPTS = 5
 # Version of the Terms/Privacy text a signup consents to (RA 10173 — recorded on
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an
