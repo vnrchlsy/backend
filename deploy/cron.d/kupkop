@@ -34,22 +34,31 @@ SHELL=/bin/bash
 # it is also the one scheduled job heavy enough for its slot to matter.
 #
 # 18:20 UTC = 02:20 PHT — the actual overnight trough for a Metro Manila userbase.
-# ⚠️ NOTE THE CONTRAST WITH THE TWO PURGE ENTRIES BELOW, which are commented "low-traffic
-# window" but run at 10:00/10:30 PHT — mid-morning. The arithmetic in those comments is right
-# (UTC+8) and the conclusion is not; they read as though 02:00 UTC were local night. They are
-# left alone here ON PURPOSE: they govern irreversible personal-data deletion, and moving that
-# schedule is an owner's decision, not a performance tweak. Worth deciding deliberately.
+#
+# ⚠️ ALL THREE NIGHTLY SLOTS ARE ASSERTED IN LOCAL TIME by common/tests/test_crontab.py, which
+# converts each hour to PHT and requires 01:00-04:59. That test exists because for three
+# sprints the two purge entries below were commented "low-traffic window" while running at
+# 10:00 and 10:30 PHT. The UTC+8 arithmetic in those comments was correct and the conclusion
+# was not — which a comment cannot catch, because the comment was the thing that was wrong.
 20 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_matching_sweep >> /var/log/kupkop/sweeps.log 2>&1
 
 # Nightly document retention purge — RA 10173 data minimization (US-SEC4)
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
-# 02:00 UTC = 10:00 PHT; low-traffic window.
-0 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
+# 18:50 UTC = 02:50 PHT (was 02:00 UTC = 10:00 PHT, mid-morning despite the old comment).
+# ⚠️ Retention is UNAFFECTED and can only lengthen: the sweep selects
+# `verification__reviewed_at <= now - DOCUMENT_RETENTION_DAYS`, so a later slot means a
+# document is held slightly longer than 90 days, never a minute less.
+50 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
 
 # Nightly account purge — RA 10173 erasure (§12.7, US-N2)
 # Anonymizes soft-deleted accounts in place once the 30-day grace window closes: the PII is
 # scrubbed, the welfare record (rescues, adoptions, shifts) survives attached to the same row.
 # Its own entry rather than part of run_sweeps because it is IRREVERSIBLE — a change to sweep
 # cadence must never quietly change how fast personal data is destroyed.
-# 02:30 UTC = 10:30 PHT; after the document purge, same low-traffic window.
-30 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_deleted_accounts >> /var/log/kupkop/purge.log 2>&1
+# 19:20 UTC = 03:20 PHT; after the document purge, keeping the original 30-minute spacing so
+# the two never contend for the same instant (was 02:30 UTC = 10:30 PHT).
+# ⚠️ The 30-day grace window is UNAFFECTED and can only lengthen: the sweep selects
+# `deleted_at <= now - ACCOUNT_PURGE_GRACE_DAYS`, so a later slot means an account is
+# anonymised slightly after its 30 days, never before. The window a user was promised — and
+# whatever the privacy policy ends up stating — is never shortened by a schedule change.
+20 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_deleted_accounts >> /var/log/kupkop/purge.log 2>&1

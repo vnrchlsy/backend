@@ -270,9 +270,9 @@ Four management commands must run on a schedule in production. A ready-to-instal
 | Command | Frequency | Purpose |
 |---|---|---|
 | `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders, badges (US-F0/E1/E2/N2/V7/B1) |
-| `run_matching_sweep` | Nightly 18:20 UTC | §11.4's lost↔found **safety net** — re-score still-open reports so a near miss gets another look (US-L2) |
-| `purge_expired_documents` | Nightly 02:00 UTC | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
-| `purge_deleted_accounts` | Nightly 02:30 UTC | RA 10173 erasure — anonymize soft-deleted accounts in place once the 30-day grace window closes (US-N2, §12.7) |
+| `run_matching_sweep` | Nightly 18:20 UTC · 02:20 PHT | §11.4's lost↔found **safety net** — re-score still-open reports so a near miss gets another look (US-L2) |
+| `purge_expired_documents` | Nightly 18:50 UTC · 02:50 PHT | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
+| `purge_deleted_accounts` | Nightly 19:20 UTC · 03:20 PHT | RA 10173 erasure — anonymize soft-deleted accounts in place once the 30-day grace window closes (US-N2, §12.7) |
 
 Quick-start (development):
 
@@ -288,6 +288,10 @@ The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Ev
 ⚠️ **All four refuse to run twice at once** (US-Q2 follow-up). Each subclasses `SingletonCommand` (`common/management_base.py`) and takes a Postgres advisory lock named after itself; if the previous run is still going, the next logs a skip and exits 0. It is a database lock rather than `flock` because §16.1 runs 1–2 Fargate tasks, and a file lock guards one host while *looking* in the crontab exactly as though it guards both.
 
 ⚠️ `run_matching_sweep` is **§11.4's safety net, not the matcher.** A lost/found report is scanned synchronously when it is filed, so nobody's reunion waits on this job — which is why it can be nightly. It was inside `run_sweeps` (hourly, 24× what §11.4 asks) until US-Q2 measured it at **11.5 minutes over 50,000 reports**: 11.5 minutes of database load every hour, competing with the reads §13.1 budgets. A sweep belongs in `run_sweeps` only if a one-hour delay would hurt someone.
+
+⚠️ **Nightly slots are stated in PHT as well as UTC, and asserted in local time.** The crontab is UTC and the userbase is UTC+8, and for three sprints both `purge_*` entries were commented *"low-traffic window"* while running at 10:00 and 10:30 PHT — mid-morning. The arithmetic in those comments was right and the conclusion was not, which is not something a comment can catch. `common/tests/test_crontab.py` converts each nightly hour to PHT and requires 01:00–04:59 (and validates the fields are legal cron, after an ordered string-replace once produced a minute of `350` — cron rejects the whole file for that, silently disabling every job in it).
+
+⚠️ **Re-timing never shortens a retention promise.** Both purges select `<= now - N days`, so a later slot means data is held slightly *longer* than its 90-day or 30-day window, never a minute less. That property is what makes the schedule a performance decision rather than a privacy one — and it is why the grace window a user was promised (and whatever the privacy policy states) cannot be changed by moving a cron line.
 
 ⚠️ The two `purge_*` commands are **irreversible** and deliberately live outside `run_sweeps`: retention deletion should be schedulable, and auditable, independently of the routine hourly sweeps.
 
