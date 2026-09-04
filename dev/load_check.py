@@ -39,6 +39,11 @@ import time
 import uuid
 from datetime import timedelta
 
+# A stress run spends many minutes inside one sweep. Redirected to a file, Python block-
+# buffers stdout, so the log stays EMPTY the whole time and the run is indistinguishable
+# from a hang — which is how the first stress run was nearly killed for being stuck.
+sys.stdout.reconfigure(line_buffering=True)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
@@ -196,14 +201,23 @@ def percentile(values, p):
 
 
 class Scenario:
-    def __init__(self, name, kind, fn, n=60):
+    def __init__(self, name, kind, fn, n=60, warmup=5):
         self.name, self.kind, self.fn, self.n = name, kind, fn, n
+        self.warmup = warmup
 
 
 def timed(fn, n, warmup=5):
-    # Warm-up requests are discarded: the first call through a Django process pays for
-    # lazy app/serializer imports and an empty plan cache, which is a startup cost, not a
-    # per-request one. Including them inflates p95 with a number no user ever sees.
+    """Time `fn` n times, after `warmup` discarded calls.
+
+    ⚠️ warmup MUST be 0 for an idempotent batch job, and this was got wrong first.
+    Warming up is right for a request — the first call through a Django process pays for
+    lazy imports and an empty plan cache, a startup cost no user ever sees. It is exactly
+    WRONG for `sweep_matches`, which is idempotent by design: the first run inserts every
+    match and notifies, and every run after it only re-scores rows that already exist. So
+    five warm-ups meant the "measured" sweep was a cheap re-run, reported as if it were
+    the real cost — an error that understates precisely the number this scenario exists
+    to expose. Warm-ups also are not free here: the sweep ran SIX times per measurement.
+    """
     for _ in range(warmup):
         fn()
     samples, statuses = [], set()
@@ -258,7 +272,10 @@ def build_scenarios(client, writers):
         # Not a request path and not in §13.1's table — measured because US-Q2 names it as
         # one of the two things that will move, and because a cron job that cannot finish
         # inside its own cadence is an outage that arrives quietly.
-        Scenario("sweep_matches() [nightly cron]", "batch", sweep, n=1),
+        # warmup=0: see timed(). This is a cold, first-run cost on a fresh match table,
+        # which is the only figure that says anything about the night the sweep meets a
+        # month of new reports.
+        Scenario("sweep_matches() [cron, FIRST run]", "batch", sweep, n=1, warmup=0),
     ]
 
 
@@ -329,7 +346,7 @@ def measure(scale: str) -> int:
 
     breaches = []
     for sc in build_scenarios(client, writers):
-        samples, statuses = timed(sc.fn, sc.n)
+        samples, statuses = timed(sc.fn, sc.n, sc.warmup)
         p50, p95, mx = percentile(samples, 50), percentile(samples, 95), max(samples)
         target = TARGETS_MS[sc.kind]
         bad = statuses - {200, 201, 202}
