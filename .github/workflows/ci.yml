@@ -92,5 +92,27 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       # pytest-django creates kupkop_test (settings TEST.NAME) on the service container.
+      # US-Q1 · --cov measures the seven packages named in pyproject's [tool.coverage.run];
+      # the JSON report is what dev/coverage_gate.py reads in the next step. No
+      # --cov-fail-under here on purpose: it can only express one number for the whole run,
+      # which is precisely the blanket global % that §15.4 says not to use.
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov --cov-report=term --cov-report=json:coverage.json
+
+      # Fails the build when a welfare-critical package drops below its ratchet, and writes
+      # the per-package table to the run's own summary page — §15.4 asks for the trend to be
+      # tracked, not just computed. Runs on failure too (`always()` would swallow a genuine
+      # test failure, so it is gated on the suite having passed but not on this job's status
+      # beyond that): if the suite is red the coverage number is meaningless anyway.
+      - name: Coverage gate
+        run: python dev/coverage_gate.py coverage.json --summary "$GITHUB_STEP_SUMMARY"
+
+      # Keeps the raw report for the trend: the summary shows this run, the artifact lets a
+      # reviewer diff against the last one.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          if-no-files-found: ignore

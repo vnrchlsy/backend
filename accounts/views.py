@@ -27,6 +27,7 @@ from common.throttles import (
     LoginIdentifierThrottle,
     LoginIpThrottle,
     OtpResendHourThrottle,
+    OtpResendIdentifierThrottle,
     OtpResendMinuteThrottle,
     PasswordForgotIdentifierThrottle,
     PasswordForgotIpThrottle,
@@ -97,7 +98,8 @@ class EmailVerifyView(APIView):
 
 class EmailResendView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [OtpResendMinuteThrottle, OtpResendHourThrottle]
+    throttle_classes = [OtpResendMinuteThrottle, OtpResendHourThrottle,
+                        OtpResendIdentifierThrottle]
 
     def post(self, request):
         s = EmailSerializer(data=request.data)

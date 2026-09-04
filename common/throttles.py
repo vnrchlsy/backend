@@ -1,20 +1,6 @@
 from rest_framework.throttling import SimpleRateThrottle
 
 
-class OtpResendMinuteThrottle(SimpleRateThrottle):
-    scope = "otp_resend_min"
-
-    def get_cache_key(self, request, view):
-        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}
-
-
-class OtpResendHourThrottle(SimpleRateThrottle):
-    scope = "otp_resend_hour"
-
-    def get_cache_key(self, request, view):
-        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}
-
-
 # US-SEC2 · abuse throttles on the public surface. Login/forgot-password get TWO
 # throttles each — one per-IP, one per-identifier — because either alone has a hole: an
 # attacker rotating IPs still hammers one target account under IP-only throttling, and
@@ -63,6 +49,23 @@ class PasswordForgotIpThrottle(IpThrottle):
 
 class PasswordForgotIdentifierThrottle(IdentifierThrottle):
     scope = "password_forgot_identifier"
+
+
+# US-Q1 · these three predate the two base classes above and were, until the §15.3 audit,
+# the app's only public write path throttled by IP ALONE — the exact hole the comment on
+# IpThrottle describes. The cost is not a takeover: it is that anyone rotating IPs can use
+# the resend endpoint to mail-bomb a stranger's inbox, over our sending domain, with a
+# message that says Kupkop on it. Now both apply, like login and forgot-password.
+class OtpResendMinuteThrottle(IpThrottle):
+    scope = "otp_resend_min"
+
+
+class OtpResendHourThrottle(IpThrottle):
+    scope = "otp_resend_hour"
+
+
+class OtpResendIdentifierThrottle(IdentifierThrottle):
+    scope = "otp_resend_identifier"
 
 
 class AccountScopedThrottle(SimpleRateThrottle):

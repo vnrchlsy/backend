@@ -160,7 +160,12 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
     # US-SEC2 · policy numbers, not code constants — revisit with real traffic data.
     "DEFAULT_THROTTLE_RATES": {
+        # US-Q1 · the first two are per-IP; the third is per-EMAIL, so rotating IPs
+        # cannot keep sending codes to one address. Sized to match the hourly IP budget:
+        # a legitimate user who never receives the mail retries a handful of times, and a
+        # mail-bombing script gets five messages instead of thousands.
         "otp_resend_min": "1/min", "otp_resend_hour": "5/hour",
+        "otp_resend_identifier": "5/hour",
         "login_ip": "20/hour", "login_identifier": "10/hour",
         "signup_ip": "10/hour",
         "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
