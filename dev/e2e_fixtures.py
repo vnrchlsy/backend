@@ -47,6 +47,7 @@ from django.utils import timezone  # noqa: E402
 
 from accounts.models import Account  # noqa: E402
 from shelter.models import ShelterProfile  # noqa: E402
+from volunteer.models import VolunteerShift  # noqa: E402
 from verifications.models import AccountCapability  # noqa: E402
 
 OWNER = "e2e.owner@kupkop.invalid"
@@ -94,6 +95,18 @@ def main():
     shelter, shelter_pw = ensure(SHELTER, "shelter", "E2E shelter")
     ShelterProfile.objects.get_or_create(
         account=shelter, defaults={"org_name": "E2E Test Shelter", "tier": 1})
+
+    # An OPEN shift in the future, because 30-volunteer-signup browses for one and there is
+    # nothing to sign up for otherwise. The flow failing on an empty list is technically
+    # correct — a flow that skips itself when its fixture is missing is the green-that-checked-
+    # nothing failure US-G1 was written about — but "correct failure" is not coverage, so the
+    # fixture provides the row rather than the flow tolerating its absence.
+    starts = timezone.now() + timezone.timedelta(days=3)
+    if not VolunteerShift.objects.filter(shelter_account=shelter, status="open",
+                                         starts_at__gte=timezone.now()).exists():
+        VolunteerShift.objects.create(
+            shelter_account=shelter, type="walking", capacity=5, status="open",
+            starts_at=starts, ends_at=starts + timezone.timedelta(hours=2))
 
     # stdout is the exports and nothing else, so `eval "$(...)"` is safe.
     print(f"export MAESTRO_EMAIL={OWNER}")
