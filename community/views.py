@@ -429,7 +429,8 @@ class StoryDetailView(APIView):
         if request.user and request.user.is_authenticated:
             if StoryReaction.objects.filter(account=request.user, story=story).exists():
                 mine = {story.pk}
-        return Response(_story_repr(story, mine))
+        # Moderation walk W1 · the author is told it is theirs, so the app does not offer them "Report this person" and "Block" on their own post.
+        return Response({**_story_repr(story, mine), "mine": bool(is_author)})
 
 
 class StoryReactionView(APIView):

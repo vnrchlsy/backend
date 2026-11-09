@@ -527,6 +527,8 @@ class ListingDetailView(APIView):
             "photos": _photo_urls(listing),
             "poster": _poster_info(listing.posted_by),
             "removed_by_moderation": listing.hidden_at is not None,   # AD7 · only its poster gets here
+            # Moderation walk W1 · the poster is told it is theirs, so the app does not offer them Report, Block or Inquire on their own listing.
+            "mine": listing.posted_by_id == getattr(request.user, "pk", None),
         })
 
     def patch(self, request, listing_id):
