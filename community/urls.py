@@ -3,6 +3,7 @@ from django.urls import path
 from community.views import (
                              MeImpactView,
                              MyPledgesView,
+                             MyStoriesView,
                              NeedCompleteView,
                              NeedDetailView,
                              NeedPledgesView,
@@ -18,6 +19,7 @@ from community.views import (
 urlpatterns = [
     path("me/impact", MeImpactView.as_view()),
     path("me/pledges", MyPledgesView.as_view()),
+    path("me/stories", MyStoriesView.as_view()),
     path("shelters/ways-to-help", WaysToHelpView.as_view()),
     path("shelters/<uuid:account_id>/needs", ShelterNeedsView.as_view()),
     path("needs/<uuid:need_id>", NeedDetailView.as_view()),

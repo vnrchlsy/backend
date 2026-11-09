@@ -13,20 +13,28 @@ Step 4 (ST5, ST23) · the feed pages by a keyset cursor over (created_at, story_
 repeat a row whenever a story is posted while someone scrolls; a cursor is a position, so it survives that, and survives
 the story it points at being hidden. `next` is opaque to the app: it hands it back as `?cursor=` and nothing else.
 
+Step 6 (ST7, SQ1) · an author edits the caption of, and deletes, their own story. A delete is SOFT for `REMOVED_RETENTION_DAYS`: the story
+leaves the feed, the detail and "your stories" at once, the row and its photos are kept as moderation evidence, and `purge_removed_stories`
+(nightly) then removes them for good, with their files. `removed` is a status of its own, so a moderation takedown can neither hide it back
+into view nor a restore bring it back.
+
 The photo rule (each must be this account's own `story_photo` upload, ST2) is the serializer's, beside the other
 field checks.
 """
 import base64
 import binascii
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from common.analytics import emit
+from common.storage import PUBLIC, delete_object, delete_object_or_log
+from common.uploads import own_upload_url_error
 
-from .models import StoryPhoto, StoryPost, StoryType
+from .models import StoryPhoto, StoryPost, StoryStatus, StoryType
 
 
 class StoryError(Exception):
@@ -183,3 +191,58 @@ def story_links(stories, viewer):
         elif s.rescue_case_id in open_reports:
             links[s.pk] = {"type": "rescue", "id": open_reports[s.rescue_case_id]}
     return links
+
+
+# --- step 6 · the author's own controls -------------------------------------------------------------------------------
+
+REMOVED_RETENTION_DAYS = 30        # SQ1 (owner, 2026-11-09): soft for 30 days, then hard with the files
+
+
+def _own_story_for_update(story_id, author):
+    """The author's story, locked, or a 404 `StoryError`: a stranger's, a deleted one and an unknown id all read the same, so a delete or
+    an edit never confirms that someone else's story exists."""
+    story = StoryPost.objects.select_for_update().filter(pk=story_id, author_account=author).exclude(status=StoryStatus.REMOVED).first()
+    if story is None:
+        raise StoryError("not_found", "No such story.", 404)
+    return story
+
+
+@transaction.atomic
+def remove_story(story_id, author):
+    """Delete the author's story: gone from every surface at once, kept for `REMOVED_RETENTION_DAYS`. A story moderation hid may be
+    deleted too (the author's own choice, and the row stays as evidence all the same); it can then no longer be restored."""
+    story = _own_story_for_update(story_id, author)
+    story.status, story.removed_at = StoryStatus.REMOVED, timezone.now()
+    story.save(update_fields=["status", "removed_at"])
+    return story
+
+
+@transaction.atomic
+def edit_caption(story_id, author, caption):
+    """Change the caption of the author's own published story. Nothing else about a story is editable (the photo and the link are what
+    was shared), and one moderation hid cannot be edited: that would let the person rewrite what is under review."""
+    story = _own_story_for_update(story_id, author)
+    if story.status == StoryStatus.HIDDEN:
+        raise StoryError("story_hidden", "Moderators hid this story, so it can't be edited. You can ask for a second look from Support.", 409)
+    story.caption = caption
+    story.save(update_fields=["caption"])
+    return story
+
+
+def purge_removed_stories(now=None):
+    """Remove for good every story deleted `REMOVED_RETENTION_DAYS` ago or more: the row, its photos and reactions (cascade), then the files.
+    Returns how many. A storage error never stops it (the row is the person's right, a bucket hiccup must not hold it): the key is logged,
+    never the URL, so the orphan can be found by hand. Only the author's OWN uploads are deleted (a legacy row can hold any URL, and the
+    bucket key is derived from it), and never a file another story row still names."""
+    cutoff = (now or timezone.now()) - timedelta(days=REMOVED_RETENTION_DAYS)
+    purged = 0
+    stories = (StoryPost.objects.filter(status=StoryStatus.REMOVED, removed_at__lte=cutoff)
+               .select_related("author_account").prefetch_related("photos"))
+    for story in stories:
+        files = [p.url for p in story.photos.all() if own_upload_url_error(p.url, story.author_account, "story_photo") is None]
+        story.delete()
+        for url in dict.fromkeys(files):
+            if not StoryPhoto.objects.filter(url=url).exists():
+                delete_object_or_log(url, PUBLIC, why="a deleted story's photo", deleter=delete_object)
+        purged += 1
+    return purged

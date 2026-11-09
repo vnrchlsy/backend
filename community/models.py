@@ -199,7 +199,8 @@ class StoryType(models.TextChoices):
 
 class StoryStatus(models.TextChoices):
     PUBLISHED = "published"
-    HIDDEN = "hidden"
+    HIDDEN = "hidden"             # a moderation takedown: only its author still sees it, and staff can restore it
+    REMOVED = "removed"           # the author deleted it (stories review step 6, SQ1): gone at once, kept 30 days, then purged for good
 
 
 class StoryPost(models.Model):
@@ -222,6 +223,8 @@ class StoryPost(models.Model):
     status = models.CharField(max_length=10, choices=StoryStatus.choices,
                               default=StoryStatus.PUBLISHED)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Set when the author deletes it. `community.stories.purge_removed_stories` removes the row and its files REMOVED_RETENTION_DAYS later.
+    removed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "story_post"

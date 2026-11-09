@@ -59,9 +59,10 @@ from .serializers import (
     ReceivedSerializer,
     StoryCreateSerializer,
     StoryPageSerializer,
+    StoryPatchSerializer,
     StorySerializer,
 )
-from .stories import StoryError, create_story, feed_page, story_links
+from .stories import StoryError, create_story, edit_caption, feed_page, remove_story, story_links
 
 
 def _err(code, message, status):
@@ -356,6 +357,35 @@ def _story_row(story, my_reacted_ids, links, viewer):
             "link": links.get(story.pk)}
 
 
+def _page_response(request, qs):
+    """One keyset page of `qs` as `StoryPageSerializer` declares it (stories review step 4): `?cursor=` in, `next` out; `?page=` is ignored.
+    Shared by the public wall and "your stories" (step 6), which differ only in the queryset they hand over."""
+    try:
+        page, next_cursor = feed_page(qs, request.query_params.get("cursor"))
+    except StoryError as e:
+        return _err(e.code, e.message, e.status)
+    mine = set()
+    if request.user and request.user.is_authenticated:
+        mine = set(StoryReaction.objects.filter(account=request.user, story__in=[s.pk for s in page])
+                   .values_list("story_id", flat=True))
+    links = story_links(page, request.user)
+    return Response(StoryPageSerializer({"results": [_story_row(s, mine, links, request.user) for s in page],
+                                         "next": next_cursor}).data)
+
+
+class MyStoriesView(APIView):
+    """Stories review step 6 · GET /me/stories: the signed-in person's own stories, newest first, paged like the wall. It includes one
+    moderation hid (with `status: hidden`, so the app can say so) and leaves out one the person deleted. Their own account's state
+    (a block, say) does not hide their own stories from them."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (StoryPost.objects.filter(author_account=request.user).exclude(status=StoryStatus.REMOVED)
+              .select_related("author_account").prefetch_related("photos", "author_account__addresses")
+              .annotate(_rcount=Count("reactions")))
+        return _page_response(request, qs)
+
+
 class StoriesView(APIView):
     """US-T1 · GET the public story feed (published only, newest-first, city-filterable);
     POST a new story (min 1 photo — a story is a picture with a caption)."""
@@ -379,19 +409,7 @@ class StoriesView(APIView):
         if city:
             qs = qs.filter(author_account__addresses__is_primary=True,
                            author_account__addresses__city=city).distinct()
-        # Stories review step 4 · a keyset page (community/stories.py): `?cursor=` in, `next` out. `?page=` is ignored.
-        try:
-            page, next_cursor = feed_page(qs, request.query_params.get("cursor"))
-        except StoryError as e:
-            return _err(e.code, e.message, e.status)
-        mine = set()
-        if request.user and request.user.is_authenticated:
-            mine = set(StoryReaction.objects
-                       .filter(account=request.user, story__in=[s.pk for s in page])
-                       .values_list("story_id", flat=True))
-        links = story_links(page, request.user)
-        return Response(StoryPageSerializer({"results": [_story_row(s, mine, links, request.user) for s in page],
-                                             "next": next_cursor}).data)
+        return _page_response(request, qs)
 
     def post(self, request):
         s = StoryCreateSerializer(data=request.data, context={"request": request})
@@ -412,14 +430,19 @@ class StoriesView(APIView):
 
 class StoryDetailView(APIView):
     """US-T1 · one story. A hidden story 404s for everyone but its author, who sees it with its
-    `hidden` status (moderation is never a silent vanish)."""
-    permission_classes = [AllowAny]
+    `hidden` status (moderation is never a silent vanish). Step 6: a story its author deleted is gone for everyone, the author too;
+    the author can PATCH the caption and DELETE the story (soft for 30 days, `community/stories.py`)."""
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAuthenticated(), TermsAccepted()] if self.request.method == "PATCH" else [IsAuthenticated()]
 
     def get(self, request, story_id):
         story = (StoryPost.objects.select_related("author_account")
                  .prefetch_related("photos", "author_account__addresses")
                  .filter(pk=story_id).first())
-        if story is None or not account_is_public(story.author_account):
+        if story is None or story.status == StoryStatus.REMOVED or not account_is_public(story.author_account):
             return _err("not_found", "No such story.", 404)      # AS5: a suspended or deleted author's story is gone for everyone
         if story.author_account_id in hidden_from(request.user):  # 7d · a block answers as a missing story does
             return _err("not_found", "No such story.", 404)
@@ -433,6 +456,28 @@ class StoryDetailView(APIView):
                 mine = {story.pk}
         # `mine` (moderation walk W1) is in the row: the author is told it is theirs, so the app does not offer them "Report this person" and "Block".
         return Response(StorySerializer(_story_row(story, mine, story_links([story], request.user), request.user)).data)
+
+    def patch(self, request, story_id):
+        extra = set(request.data) - {"caption"} if hasattr(request.data, "keys") else set()
+        if extra:
+            return _err("invalid", "Only the caption can be edited.", 400)
+        s = StoryPatchSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        try:
+            story = edit_caption(story_id, request.user, s.validated_data["caption"])
+        except StoryError as e:
+            return _err(e.code, e.message, e.status)
+        story = (StoryPost.objects.select_related("author_account").prefetch_related("photos", "author_account__addresses")
+                 .annotate(_rcount=Count("reactions")).get(pk=story.pk))
+        mine = set(StoryReaction.objects.filter(account=request.user, story=story).values_list("story_id", flat=True))
+        return Response(StorySerializer(_story_row(story, mine, story_links([story], request.user), request.user)).data)
+
+    def delete(self, request, story_id):
+        try:
+            remove_story(story_id, request.user)
+        except StoryError as e:
+            return _err(e.code, e.message, e.status)
+        return Response(status=204)
 
 
 class StoryReactionView(APIView):

@@ -131,6 +131,12 @@ class StoryPageSerializer(serializers.Serializer):
     next = serializers.CharField(allow_null=True)
 
 
+class StoryPatchSerializer(serializers.Serializer):
+    """Stories review step 6 · the one thing an author can change: the caption (through the word filter, and a blank one is fine: a story
+    is a picture). The view refuses any other key."""
+    caption = ModeratedCharField(allow_blank=True)
+
+
 # --- IB26 · GET /me/impact: the response, as a contract ------------------------
 # The payload was a hand-built dict, and the app read it as `any`. These say what it is, the view returns it, and
 # community/tests/test_impact_contract.py holds the app's TypeScript types (`ImpactResponse`, `Impact`, `BadgeShape`,
