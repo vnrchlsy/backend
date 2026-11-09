@@ -27,11 +27,9 @@ from .models import (
     NeedPledge,
     NeedStatus,
     ShelterNeed,
-    StoryPhoto,
     StoryPost,
     StoryReaction,
     StoryStatus,
-    StoryType,
 )
 from .needs import (
     NeedError,
@@ -61,6 +59,7 @@ from .serializers import (
     ReceivedSerializer,
     StoryCreateSerializer,
 )
+from .stories import StoryError, create_story
 
 PAGE_SIZE = 20     # stories only; the wishlist lists page through `community/reads.py`
 
@@ -384,27 +383,19 @@ class StoriesView(APIView):
         return Response({"results": [_story_repr(s, mine) for s in page]})
 
     def post(self, request):
-        s = StoryCreateSerializer(data=request.data)
+        s = StoryCreateSerializer(data=request.data, context={"request": request})
         s.is_valid(raise_exception=True)
         d = s.validated_data
         if not d["photos"]:
             return _err("photo_required", "A story needs at least one photo.", 422)
-        # Type auto-derives from the link (T0): an adoption story if it cites a listing, a
-        # rescue story if it cites a case, else whatever was chosen (default general).
-        if d.get("adoption_listing_id"):
-            story_type = StoryType.ADOPTION
-        elif d.get("rescue_case_id"):
-            story_type = StoryType.RESCUE
-        else:
-            story_type = d.get("story_type") or StoryType.GENERAL
-        story = StoryPost.objects.create(
-            author_account=request.user, caption=d["caption"], story_type=story_type,
-            adoption_listing_id=d.get("adoption_listing_id"),
-            rescue_case_id=d.get("rescue_case_id"))
-        for ph in d["photos"]:
-            StoryPhoto.objects.create(story=story, url=ph["file_url"],
-                                      is_primary=ph.get("is_primary", False))
-        emit("story_posted", story_type=story_type)
+        # Stories review steps 1 and 3 · one writer: atomic, the link checked and earned, the type derived from it.
+        try:
+            story = create_story(request.user, photos=d["photos"], caption=d["caption"],
+                                 story_type=d.get("story_type"),
+                                 adoption_listing_id=d.get("adoption_listing_id"),
+                                 rescue_case_id=d.get("rescue_case_id"))
+        except StoryError as e:
+            return _err(e.code, e.message, e.status)
         return Response({"story_id": str(story.pk)}, status=201)
 
 

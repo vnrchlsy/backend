@@ -11,6 +11,11 @@ def _hdr(acc):
     return {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(acc)['access']}"}
 
 
+def _own(acc, name="a.jpg"):
+    """A URL the presign endpoint would have handed this account for a story photo (stories review step 2)."""
+    return f"https://bkt.example/story_photo/{acc.pk}/{name}"
+
+
 def _story(author=None, status=StoryStatus.PUBLISHED, story_type=StoryType.GENERAL, photos=1):
     s = StoryPost.objects.create(author_account=author or AccountFactory(),
                                  story_type=story_type, caption="Adopted!", status=status)
@@ -23,7 +28,7 @@ def _story(author=None, status=StoryStatus.PUBLISHED, story_type=StoryType.GENER
 def test_compose_a_story_with_a_photo(client):
     author = AccountFactory()
     res = client.post("/api/v1/stories",
-                      {"caption": "Meet Rex", "photos": [{"file_url": "https://x/a.jpg"}]},
+                      {"caption": "Meet Rex", "photos": [{"file_url": _own(author)}]},
                       content_type="application/json", **_hdr(author))
     assert res.status_code == 201
     story = StoryPost.objects.get(pk=res.json()["story_id"])
@@ -46,12 +51,15 @@ def test_story_type_auto_derives_from_a_linked_case(client):
     from sagip.models import RescueCase, StrayReport
     rep = StrayReport.objects.create(species="dog", condition="injured",
                                      geom=Point(121.0, 14.6, srid=4326))
-    case = RescueCase.objects.create(report=rep, claimed_by_account=AccountFactory())
+    from django.utils import timezone
+    claimer = AccountFactory()
+    # Stories review step 3 · a rescue story is its claimer's (or reporter's), once the rescue resolved.
+    case = RescueCase.objects.create(report=rep, claimed_by_account=claimer, resolved_at=timezone.now())
     res = client.post("/api/v1/stories",
                       {"caption": "saved", "story_type": "general",
                        "rescue_case_id": str(case.pk),
-                       "photos": [{"file_url": "https://x/a.jpg"}]},
-                      content_type="application/json", **_hdr(AccountFactory()))
+                       "photos": [{"file_url": _own(claimer)}]},
+                      content_type="application/json", **_hdr(claimer))
     assert res.status_code == 201
     assert StoryPost.objects.get(pk=res.json()["story_id"]).story_type == StoryType.RESCUE
 
@@ -124,14 +132,15 @@ def test_a_hidden_story_404s_for_a_stranger_but_the_author_still_sees_it(client)
 
 
 @pytest.mark.django_db
-def test_posting_a_story_emits_a_server_side_analytics_event(client, caplog):
-    """US-Y1 · a server-authoritative outcome emits one account-free event."""
+def test_posting_a_story_emits_a_server_side_analytics_event(client, caplog, django_capture_on_commit_callbacks):
+    """US-Y1 · a server-authoritative outcome emits one account-free event (after the commit, stories review step 1)."""
     import json
     import logging
-    with caplog.at_level(logging.INFO, logger="kupkop.analytics"):
+    author = AccountFactory()
+    with caplog.at_level(logging.INFO, logger="kupkop.analytics"), django_capture_on_commit_callbacks(execute=True):
         client.post("/api/v1/stories",
-                    {"caption": "hi", "photos": [{"file_url": "https://x/a.jpg"}]},
-                    content_type="application/json", **_hdr(AccountFactory()))
+                    {"caption": "hi", "photos": [{"file_url": _own(author)}]},
+                    content_type="application/json", **_hdr(author))
     events = [json.loads(r.getMessage()) for r in caplog.records
               if r.name == "kupkop.analytics"]
     posted = [e for e in events if e["event"] == "story_posted"]

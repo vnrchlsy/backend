@@ -229,6 +229,16 @@ class StoryPost(models.Model):
             models.Index(fields=["author_account"], name="idx_story_post_author"),
             models.Index(fields=["status", "-created_at"], name="idx_story_post_status"),
         ]
+        # Stories review SQ3 · one story per author per adoption and per rescue. The writer
+        # (community/stories.py) checks first; these hold two racing posts to one row.
+        constraints = [
+            models.UniqueConstraint(fields=["author_account", "adoption_listing"],
+                                    condition=models.Q(adoption_listing__isnull=False),
+                                    name="uq_story_author_listing"),
+            models.UniqueConstraint(fields=["author_account", "rescue_case"],
+                                    condition=models.Q(rescue_case__isnull=False),
+                                    name="uq_story_author_case"),
+        ]
 
 
 class StoryPhoto(models.Model):

@@ -21,7 +21,7 @@ def _stale(account, version="2026-08-01"):
 
 
 def _story(who):
-    return c(who).post("/api/v1/stories", {"caption": "hello", "story_type": "general", "photos": [{"file_url": "https://x/p.jpg"}]},
+    return c(who).post("/api/v1/stories", {"caption": "hello", "story_type": "general", "photos": [{"file_url": f"https://bkt.example/story_photo/{who.pk}/p.jpg"}]},
                        format="json")
 
 
