@@ -25,7 +25,7 @@ class StoryError(Exception):
         self.code, self.message, self.status = code, message, status
 
 
-_EXISTS = StoryError("story_exists", "You've already shared a story about this. You can open it from your stories.", 409)
+_EXISTS = StoryError("story_exists", "You've already shared a story about this.", 409)
 
 
 def _listing_link(author, listing_id):
