@@ -59,9 +59,7 @@ from .serializers import (
     ReceivedSerializer,
     StoryCreateSerializer,
 )
-from .stories import StoryError, create_story
-
-PAGE_SIZE = 20     # stories only; the wishlist lists page through `community/reads.py`
+from .stories import StoryError, create_story, feed_page
 
 
 def _err(code, message, status):
@@ -369,18 +367,22 @@ class StoriesView(APIView):
               .exclude(author_account_id__in=hidden_from(request.user))     # review step 7d · a block, both ways
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
-              .annotate(_rcount=Count("reactions")).order_by("-created_at"))
+              .annotate(_rcount=Count("reactions")))
         city = request.query_params.get("city")
         if city:
             qs = qs.filter(author_account__addresses__is_primary=True,
                            author_account__addresses__city=city).distinct()
-        page = list(qs[:PAGE_SIZE])
+        # Stories review step 4 · a keyset page (community/stories.py): `?cursor=` in, `next` out. `?page=` is ignored.
+        try:
+            page, next_cursor = feed_page(qs, request.query_params.get("cursor"))
+        except StoryError as e:
+            return _err(e.code, e.message, e.status)
         mine = set()
         if request.user and request.user.is_authenticated:
             mine = set(StoryReaction.objects
                        .filter(account=request.user, story__in=[s.pk for s in page])
                        .values_list("story_id", flat=True))
-        return Response({"results": [_story_repr(s, mine) for s in page]})
+        return Response({"results": [_story_repr(s, mine) for s in page], "next": next_cursor})
 
     def post(self, request):
         s = StoryCreateSerializer(data=request.data, context={"request": request})
