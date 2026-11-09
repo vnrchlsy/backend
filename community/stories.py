@@ -135,3 +135,51 @@ def feed_page(stories, cursor=None):
     more = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
     return rows, (encode_cursor(rows[-1].created_at, rows[-1].pk) if more else None)
+
+
+# --- step 5 · which stories link to something the viewer may open ------------------------------------------------------
+
+def story_links(stories, viewer):
+    """{story_id: {"type", "id"}} for the stories in `stories` whose adoption or rescue `viewer` could open, by the same rules as
+    the screens it opens (D-S6-4: context goes through the gated detail screens, so the link is offered only when they would
+    answer). A fixed number of queries however many stories there are.
+
+    An adoption: the poster always; anyone else only while the listing is not taken down, its poster is publicly visible and a
+    Verified Member or verified shelter (`listing_is_public`), and the viewer has not blocked the poster, either way round.
+    A rescue: the public report, unless it was taken down, which only its reporter and the case's claimer can still open. The id
+    is the REPORT's, because that is what the report screen takes."""
+    from accounts.visibility import public_account_q
+    from listings.models import AdoptionListing, ListingStatus
+    from listings.visibility import public_poster_q
+    from moderation.blocks import hidden_from
+    from sagip.models import RescueCase
+
+    stories = list(stories)
+    listing_ids = {s.adoption_listing_id for s in stories if s.adoption_listing_id}
+    case_ids = {s.rescue_case_id for s in stories if s.rescue_case_id}
+    me = viewer.pk if viewer is not None and getattr(viewer, "is_authenticated", False) else None
+
+    open_listings = set()
+    if listing_ids:
+        public = (AdoptionListing.objects.filter(pk__in=listing_ids, hidden_at__isnull=True)
+                  .exclude(status=ListingStatus.DRAFT).filter(public_account_q("posted_by__")).filter(public_poster_q())
+                  .exclude(posted_by_id__in=hidden_from(viewer)))
+        open_listings = set(public.values_list("pk", flat=True))
+        if me:
+            open_listings |= set(AdoptionListing.objects.filter(pk__in=listing_ids, posted_by_id=me)
+                                 .exclude(status=ListingStatus.DRAFT).values_list("pk", flat=True))
+
+    open_reports = {}
+    if case_ids:
+        for case_id, report_id, hidden, reporter_id, claimer_id in RescueCase.objects.filter(pk__in=case_ids).values_list(
+                "pk", "report_id", "report__hidden_at", "report__reporter_account_id", "claimed_by_account_id"):
+            if hidden is None or (me is not None and me in (reporter_id, claimer_id)):
+                open_reports[case_id] = report_id
+
+    links = {}
+    for s in stories:
+        if s.adoption_listing_id in open_listings:
+            links[s.pk] = {"type": "adoption", "id": s.adoption_listing_id}
+        elif s.rescue_case_id in open_reports:
+            links[s.pk] = {"type": "rescue", "id": open_reports[s.rescue_case_id]}
+    return links

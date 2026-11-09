@@ -88,6 +88,49 @@ class StoryCreateSerializer(serializers.Serializer):
         return _own_story_photos(photos, self.context["request"].user)
 
 
+# --- Stories review step 5 (ST6, ST16) · a story, as a contract -----------------------------------------------------------
+# `_story_repr` built this by hand and the app kept three copies of its shape. These say what a story is, the feed and the detail
+# return them, and community/tests/test_stories_contract.py holds the app's types (`Story`, `StoryPage`, `StoryLink`, `StoryAuthor`,
+# `StoryPhoto` in mobile_app/src/community.ts) to the same field names.
+
+class StoryAuthorSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    city = serializers.CharField(allow_blank=True)
+
+
+class StoryPhotoOutSerializer(serializers.Serializer):
+    url = serializers.CharField()
+    is_primary = serializers.BooleanField()
+
+
+class StoryLinkSerializer(serializers.Serializer):
+    """The adoption or rescue a story is about, for a viewer who may open it. `id` is the id its screen opens: a listing's
+    `listing_id`, or a rescue's `report_id` (the public report screen, not the case)."""
+    type = serializers.ChoiceField(choices=["adoption", "rescue"])
+    id = serializers.UUIDField()
+
+
+class StorySerializer(serializers.Serializer):
+    story_id = serializers.UUIDField()
+    author = StoryAuthorSerializer()
+    story_type = serializers.ChoiceField(choices=StoryType.choices)
+    caption = serializers.CharField(allow_blank=True)
+    status = serializers.CharField()
+    photos = StoryPhotoOutSerializer(many=True)
+    primary_photo = serializers.CharField(allow_null=True)
+    reaction_count = serializers.IntegerField()
+    my_reaction = serializers.BooleanField()
+    mine = serializers.BooleanField()
+    # UTC, as stored, with a Z (DRF would render it in TIME_ZONE, Asia/Manila: the same instant, written +08:00).
+    created_at = serializers.DateTimeField(default_timezone=UTC)
+    link = StoryLinkSerializer(allow_null=True)
+
+
+class StoryPageSerializer(serializers.Serializer):
+    results = StorySerializer(many=True)
+    next = serializers.CharField(allow_null=True)
+
+
 # --- IB26 · GET /me/impact: the response, as a contract ------------------------
 # The payload was a hand-built dict, and the app read it as `any`. These say what it is, the view returns it, and
 # community/tests/test_impact_contract.py holds the app's TypeScript types (`ImpactResponse`, `Impact`, `BadgeShape`,

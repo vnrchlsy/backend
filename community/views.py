@@ -58,8 +58,10 @@ from .serializers import (
     PledgeCreateSerializer,
     ReceivedSerializer,
     StoryCreateSerializer,
+    StoryPageSerializer,
+    StorySerializer,
 )
-from .stories import StoryError, create_story, feed_page
+from .stories import StoryError, create_story, feed_page, story_links
 
 
 def _err(code, message, status):
@@ -338,15 +340,20 @@ def _author_city(account):
     return addr.city if addr else ""
 
 
-def _story_repr(story, my_reacted_ids):
-    return {"story_id": str(story.pk),
-            "author": {"name": story.author_account.display_name,
-                       "city": _author_city(story.author_account)},
+def _story_row(story, my_reacted_ids, links, viewer):
+    """One story as `StorySerializer` declares it (stories review step 5). The primary photo leads; with none marked, the first."""
+    photos = sorted(story.photos.all(), key=lambda p: (not p.is_primary, str(p.pk)))
+    count = getattr(story, "_rcount", None)
+    return {"story_id": story.pk,
+            "author": {"name": story.author_account.display_name, "city": _author_city(story.author_account)},
             "story_type": story.story_type, "caption": story.caption, "status": story.status,
-            "photos": [{"url": p.url, "is_primary": p.is_primary} for p in story.photos.all()],
-            "reaction_count": getattr(story, "_rcount", None)
-            if getattr(story, "_rcount", None) is not None else story.reactions.count(),
-            "my_reaction": story.pk in my_reacted_ids}
+            "photos": [{"url": p.url, "is_primary": p.is_primary} for p in photos],
+            "primary_photo": photos[0].url if photos else None,
+            "reaction_count": count if count is not None else story.reactions.count(),
+            "my_reaction": story.pk in my_reacted_ids,
+            "mine": bool(viewer is not None and viewer.is_authenticated and viewer.pk == story.author_account_id),
+            "created_at": story.created_at,
+            "link": links.get(story.pk)}
 
 
 class StoriesView(APIView):
@@ -382,7 +389,9 @@ class StoriesView(APIView):
             mine = set(StoryReaction.objects
                        .filter(account=request.user, story__in=[s.pk for s in page])
                        .values_list("story_id", flat=True))
-        return Response({"results": [_story_repr(s, mine) for s in page], "next": next_cursor})
+        links = story_links(page, request.user)
+        return Response(StoryPageSerializer({"results": [_story_row(s, mine, links, request.user) for s in page],
+                                             "next": next_cursor}).data)
 
     def post(self, request):
         s = StoryCreateSerializer(data=request.data, context={"request": request})
@@ -422,8 +431,8 @@ class StoryDetailView(APIView):
         if request.user and request.user.is_authenticated:
             if StoryReaction.objects.filter(account=request.user, story=story).exists():
                 mine = {story.pk}
-        # Moderation walk W1 · the author is told it is theirs, so the app does not offer them "Report this person" and "Block" on their own post.
-        return Response({**_story_repr(story, mine), "mine": bool(is_author)})
+        # `mine` (moderation walk W1) is in the row: the author is told it is theirs, so the app does not offer them "Report this person" and "Block".
+        return Response(StorySerializer(_story_row(story, mine, story_links([story], request.user), request.user)).data)
 
 
 class StoryReactionView(APIView):
