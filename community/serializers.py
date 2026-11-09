@@ -7,6 +7,7 @@ from moderation.textfilter import ModeratedCharField
 
 from .models import NeedCategory, NeedStatus, StoryType
 from .needs import MAX_QTY
+from .stories import MAX_CAPTION, MAX_PHOTOS
 
 
 class BadCategory(APIException):
@@ -77,15 +78,27 @@ def _own_story_photos(photos, account):
     return photos
 
 
+_CAPTION_TOO_LONG = f"Captions can be up to {MAX_CAPTION:,} characters."
+
+
 class StoryCreateSerializer(serializers.Serializer):
-    caption = ModeratedCharField(required=False, allow_blank=True, default="")
+    caption = ModeratedCharField(required=False, allow_blank=True, default="", max_length=MAX_CAPTION,
+                                 error_messages={"max_length": _CAPTION_TOO_LONG})
     story_type = serializers.ChoiceField(choices=StoryType.choices, required=False)
-    photos = StoryPhotoSerializer(many=True, required=False, default=list)
+    # Checked for COUNT before any photo is looked at, so 200 of them cost nothing.
+    photos = StoryPhotoSerializer(many=True, required=False, default=list, max_length=MAX_PHOTOS,
+                                  error_messages={"max_length": f"A story can have up to {MAX_PHOTOS} photos."})
     adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)
     rescue_case_id = serializers.UUIDField(required=False, allow_null=True)
 
     def validate_photos(self, photos):
-        return _own_story_photos(photos, self.context["request"].user)
+        photos = _own_story_photos(photos, self.context["request"].user)
+        # Step 8 · the same photo twice is one photo; and "primary" is one photo's, so two marked is a mistake, not a choice.
+        if len({p["file_url"] for p in photos}) != len(photos):
+            raise serializers.ValidationError("That photo is in the story twice.")
+        if sum(1 for p in photos if p.get("is_primary")) > 1:
+            raise serializers.ValidationError("Only one photo can be the cover.")
+        return photos
 
 
 # --- Stories review step 5 (ST6, ST16) · a story, as a contract -----------------------------------------------------------
@@ -129,6 +142,12 @@ class StorySerializer(serializers.Serializer):
 class StoryPageSerializer(serializers.Serializer):
     results = StorySerializer(many=True)
     next = serializers.CharField(allow_null=True)
+
+
+class StoryPatchSerializer(serializers.Serializer):
+    """Stories review step 6 · the one thing an author can change: the caption (through the word filter, and a blank one is fine: a story
+    is a picture). The view refuses any other key."""
+    caption = ModeratedCharField(allow_blank=True, max_length=MAX_CAPTION, error_messages={"max_length": _CAPTION_TOO_LONG})
 
 
 # --- IB26 · GET /me/impact: the response, as a contract ------------------------

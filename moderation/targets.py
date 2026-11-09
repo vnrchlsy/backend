@@ -77,7 +77,7 @@ def _describe_qr(q):
 def _describe_story(s):
     from community.models import StoryStatus
     return _view(_first_line(s.caption), "Story with no caption", s.caption, _urls(s.photos),
-                 _owner(s.author_account), s.status == StoryStatus.HIDDEN)
+                 _owner(s.author_account), s.status in (StoryStatus.HIDDEN, StoryStatus.REMOVED))
 
 
 def _describe_shift(s):
@@ -111,7 +111,9 @@ def _hide_story(story, reviewer, reason=""):
     from notifications.service import notify
     # US-T3 / D-S6-4 · hiding, NOT deletion. The row and its photos survive, the feed excludes it, the
     # author sees a "hidden by moderation" state rather than a vanished post. The flag stays as the audit trail.
-    changed = bool(StoryPost.objects.filter(pk=story.pk).exclude(status=StoryStatus.HIDDEN).update(status=StoryStatus.HIDDEN))
+    # A story its author deleted is not hidden into view again: `removed` stays `removed` (stories review step 6, SQ1).
+    changed = bool(StoryPost.objects.filter(pk=story.pk).exclude(status__in=(StoryStatus.HIDDEN, StoryStatus.REMOVED))
+                   .update(status=StoryStatus.HIDDEN))
     if changed:
         # Review step 9 (MO7) · the author is told, why, and how to ask for a second look. A takedown used to be a silent vanish.
         notify(story.author_account, "story_removed", title="Your story was hidden",
@@ -324,7 +326,7 @@ def _report_done(report):
 
 def _story_done(story):
     from community.models import StoryStatus
-    return ALREADY_HIDDEN if story.status == StoryStatus.HIDDEN else None
+    return ALREADY_HIDDEN if story.status in (StoryStatus.HIDDEN, StoryStatus.REMOVED) else None
 
 
 def _shift_done(shift):

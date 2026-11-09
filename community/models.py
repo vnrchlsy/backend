@@ -199,7 +199,8 @@ class StoryType(models.TextChoices):
 
 class StoryStatus(models.TextChoices):
     PUBLISHED = "published"
-    HIDDEN = "hidden"
+    HIDDEN = "hidden"             # a moderation takedown: only its author still sees it, and staff can restore it
+    REMOVED = "removed"           # the author deleted it (stories review step 6, SQ1): gone at once, kept 30 days, then purged for good
 
 
 class StoryPost(models.Model):
@@ -222,6 +223,8 @@ class StoryPost(models.Model):
     status = models.CharField(max_length=10, choices=StoryStatus.choices,
                               default=StoryStatus.PUBLISHED)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Set when the author deletes it. `community.stories.purge_removed_stories` removes the row and its files REMOVED_RETENTION_DAYS later.
+    removed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "story_post"
@@ -246,9 +249,15 @@ class StoryPhoto(models.Model):
     story = models.ForeignKey(StoryPost, on_delete=models.CASCADE, related_name="photos")
     url = models.TextField()
     is_primary = models.BooleanField(default=False)
+    # Stories review step 8 (ST8) · the order the author sent the photos in (0 first). Reads order by it, with `photo_id` to break a tie.
+    position = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         db_table = "story_photo"
+        # At most ONE primary photo per story, held by the database (the writer picks it: the marked one, else the first).
+        constraints = [
+            models.UniqueConstraint(fields=["story"], condition=models.Q(is_primary=True), name="uq_story_photo_one_primary"),
+        ]
 
 
 class StoryReaction(models.Model):

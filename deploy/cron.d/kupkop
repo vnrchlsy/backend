@@ -47,6 +47,11 @@ SHELL=/bin/bash
 # badge arriving a night late hurts nobody. 19:50 UTC = 03:50 PHT, asserted by test_crontab.py.
 50 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_badge_sweep >> /var/log/kupkop/sweeps.log 2>&1
 
+# Nightly purge of stories their author deleted (stories review step 6, SQ1) — soft for 30 days, then the row, its photos and the files go.
+# Its own entry because it is irreversible (a sweep's cadence must never govern how fast something a person deleted is destroyed). 19:05 UTC = 03:05 PHT, after the matching sweep and clear of every other job;
+# the 30 days can only lengthen with a later slot, never shorten.
+5 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_removed_stories >> /var/log/kupkop/purge.log 2>&1
+
 # Nightly document retention purge — RA 10173 data minimization (US-SEC4)
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
 # 18:50 UTC = 02:50 PHT (was 02:00 UTC = 10:00 PHT, mid-morning despite the old comment).
