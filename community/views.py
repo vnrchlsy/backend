@@ -342,8 +342,8 @@ def _author_city(account):
 
 
 def _story_row(story, my_reacted_ids, links, viewer):
-    """One story as `StorySerializer` declares it (stories review step 5). The primary photo leads; with none marked, the first."""
-    photos = sorted(story.photos.all(), key=lambda p: (not p.is_primary, str(p.pk)))
+    """One story as `StorySerializer` declares it (stories review step 5). The primary photo leads, then the rest in the order they were sent (step 8)."""
+    photos = sorted(story.photos.all(), key=lambda p: (not p.is_primary, p.position, str(p.pk)))
     count = getattr(story, "_rcount", None)
     return {"story_id": story.pk,
             "author": {"name": story.author_account.display_name, "city": _author_city(story.author_account)},

@@ -249,9 +249,15 @@ class StoryPhoto(models.Model):
     story = models.ForeignKey(StoryPost, on_delete=models.CASCADE, related_name="photos")
     url = models.TextField()
     is_primary = models.BooleanField(default=False)
+    # Stories review step 8 (ST8) · the order the author sent the photos in (0 first). Reads order by it, with `photo_id` to break a tie.
+    position = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         db_table = "story_photo"
+        # At most ONE primary photo per story, held by the database (the writer picks it: the marked one, else the first).
+        constraints = [
+            models.UniqueConstraint(fields=["story"], condition=models.Q(is_primary=True), name="uq_story_photo_one_primary"),
+        ]
 
 
 class StoryReaction(models.Model):

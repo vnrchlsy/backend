@@ -36,6 +36,9 @@ from common.uploads import own_upload_url_error
 
 from .models import StoryPhoto, StoryPost, StoryStatus, StoryType
 
+MAX_CAPTION = 2000    # SQ4 (owner, 2026-11-09)
+MAX_PHOTOS = 6        # the app's compose screen takes up to this many (stories review step 8)
+
 
 class StoryError(Exception):
     def __init__(self, code, message, status):
@@ -92,9 +95,10 @@ def create_story(author, *, photos, caption="", story_type=None, adoption_listin
     try:
         with transaction.atomic():
             story = StoryPost.objects.create(author_account=author, caption=caption, story_type=derived_type, **link)
-            for photo in photos:
-                StoryPhoto.objects.create(story=story, url=photo["file_url"],
-                                          is_primary=photo.get("is_primary", False))
+            # Step 8 · each photo keeps the order it was sent in, and exactly one is primary: the marked one, else the first.
+            primary = next((i for i, photo in enumerate(photos) if photo.get("is_primary")), 0)
+            for position, photo in enumerate(photos):
+                StoryPhoto.objects.create(story=story, url=photo["file_url"], is_primary=(position == primary), position=position)
     except IntegrityError:
         if link and StoryPost.objects.filter(author_account=author, **link).exists():
             raise _EXISTS from None           # a racing post on the same link won (uq_story_author_*)
