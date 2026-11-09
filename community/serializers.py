@@ -64,12 +64,28 @@ class StoryPhotoSerializer(serializers.Serializer):
     is_primary = serializers.BooleanField(required=False, default=False)
 
 
+def _own_story_photos(photos, account):
+    """Stories review step 2 (ST2) · each photo must be THIS account's own `story_photo` upload
+    (common/uploads.py), as every other photo surface requires. A story is on the one feed guests can
+    read, so a foreign URL there would be fetched by every viewer's phone, and the erasure could not
+    tell the author's files from a stranger's."""
+    from common.uploads import own_upload_url_error
+    for photo in photos:
+        error = own_upload_url_error(photo["file_url"], account, "story_photo", noun="photo")
+        if error:
+            raise serializers.ValidationError(error)
+    return photos
+
+
 class StoryCreateSerializer(serializers.Serializer):
     caption = ModeratedCharField(required=False, allow_blank=True, default="")
     story_type = serializers.ChoiceField(choices=StoryType.choices, required=False)
     photos = StoryPhotoSerializer(many=True, required=False, default=list)
     adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)
     rescue_case_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate_photos(self, photos):
+        return _own_story_photos(photos, self.context["request"].user)
 
 
 # --- IB26 · GET /me/impact: the response, as a contract ------------------------

@@ -78,7 +78,7 @@ def test_story_creation_is_throttled():
 
     codes = _statuses(
         lambda: client.post("/api/v1/stories",
-                            {"caption": "hello", "photos": [{"file_url": "https://x.invalid/a.jpg"}]},
+                            {"caption": "hello", "photos": [{"file_url": f"https://bkt.example/story_photo/{account.pk}/a.jpg"}]},
                             content_type="application/json", **auth).status_code,
         _limit_for("story_create"))
 

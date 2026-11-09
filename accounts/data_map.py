@@ -115,8 +115,9 @@ def _entries():
         ("community.ShelterNeed", "shelter_account"):
             E("needs", Keep("the shelter's wishlist; donors' pledges and receipts name it")),
         ("community.StoryPost", "author_account"):
-            E("stories", Keep("published stories are hidden from the public feed once the author is "
-                              "deleted, but stay as the record they are")),
+            # Stories review SQ2 (owner, 2026-11-09) · a story is the author's own expression, not a shared
+            # record like an adoption: it goes, with its photos and their files (accounts/purge.py).
+            E("stories", Delete()),
         ("community.StoryReaction", "account"):
             E("story_reactions", Keep("keeps a story's reaction count from quietly dropping")),
         # ------------------------------------------------------------------- devices

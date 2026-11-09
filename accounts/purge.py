@@ -107,9 +107,19 @@ def _qr_image_files(account):
     return [u for u in urls if u and donation_qr_url_error(u, account) is None]
 
 
+def _story_photo_files(account):
+    from common.uploads import own_upload_url_error
+    from community.models import StoryPhoto
+    urls = StoryPhoto.objects.filter(story__author_account=account).values_list("url", flat=True)
+    # Stories review SQ2 · ONLY this account's own `story_photo` keys: rows written before step 2 can
+    # hold any URL, and the bucket key is derived from the URL (the PP5 rule).
+    return [u for u in urls if u and own_upload_url_error(u, account, "story_photo") is None]
+
+
 #: Stored objects behind rows the map erases. Collected BEFORE the rows go (afterwards nothing
 #: can find them), deleted AFTER, and only if nothing else still points at the same file.
-_FILE_SOURCES = {"pets.Pet": _pet_photo_files, "shelter.DonationQr": _qr_image_files}
+_FILE_SOURCES = {"pets.Pet": _pet_photo_files, "shelter.DonationQr": _qr_image_files,
+                 "community.StoryPost": _story_photo_files}
 
 
 def _file_is_still_used(url):
