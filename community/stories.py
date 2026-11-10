@@ -23,6 +23,7 @@ field checks.
 """
 import base64
 import binascii
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -31,7 +32,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from common.analytics import emit
-from common.storage import PUBLIC, delete_object, delete_object_or_log
+from common.storage import PUBLIC, delete_object, delete_object_or_log, list_objects, object_url
 from common.uploads import own_upload_url_error
 
 from .models import StoryPhoto, StoryPost, StoryStatus, StoryType
@@ -280,3 +281,56 @@ def purge_removed_stories(now=None):
     if purged:
         emit("story_purged", count=purged)
     return purged
+
+
+# --- stories test plan F6 · the file nobody cites ---------------------------------------------------------------------------------
+
+ORPHAN_GRACE_HOURS = 24         # an upload gets a day to be posted
+ORPHAN_REFUSE_MIN = 50          # the valve below only judges a night with at least this many candidates ...
+ORPHAN_REFUSE_FRACTION = 0.5    # ... and refuses when more than this share of what it found looks orphaned
+_ORPHAN_BATCH = 200
+
+
+def _cited_story_keys(keys):
+    """Which of `keys` some story_photo row names. Matched on the KEY (the row's URL may carry another host: a CDN, an older bucket name)."""
+    cited = set()
+    for i in range(0, len(keys), _ORPHAN_BATCH):
+        batch = keys[i:i + _ORPHAN_BATCH]
+        q = Q()
+        for k in batch:
+            q |= Q(url__endswith="/" + k)
+        for url in StoryPhoto.objects.filter(q).values_list("url", flat=True):
+            cited.update(k for k in batch if url.endswith("/" + k))
+    return cited
+
+
+def sweep_orphan_story_uploads(now=None, lister=None, deleter=None):
+    """Delete `story_photo/` files older than a day that no `story_photo` row cites: the upload that succeeded and the post that never did.
+
+    Returns how many it deleted. Built so it cannot make things worse:
+      - only the `story_photo/` prefix, and only files past `ORPHAN_GRACE_HOURS`, so a person who uploads and posts later is safe;
+      - a file a row cites is kept whatever its story's state (a soft-deleted story's files are evidence for its 30 days);
+      - a storage error on one file is logged by KEY and the sweep goes on;
+      - if more than half of what it found looks orphaned (and there are enough to judge), it deletes NOTHING and logs an error: that shape means its idea of
+        "cited" is wrong, not that the bucket is mostly litter.
+    `lister` and `deleter` are for tests; the real ones are `common.storage.list_objects` and `delete_object`."""
+    cutoff = (now or timezone.now()) - timedelta(hours=ORPHAN_GRACE_HOURS)
+    old = [k for k, modified in (lister or list_objects)(PUBLIC, "story_photo/")
+           if k.startswith("story_photo/") and not k.endswith("/") and modified < cutoff]
+    cited = _cited_story_keys(old)
+    orphans = [k for k in old if k not in cited]
+    log = logging.getLogger("kupkop.storage")
+    if len(orphans) >= ORPHAN_REFUSE_MIN and len(orphans) > ORPHAN_REFUSE_FRACTION * len(old):
+        log.error("refusing to sweep story uploads: %d of %d old files look orphaned, which means the check is wrong; nothing deleted", len(orphans), len(old))
+        return 0
+    deleted = 0
+    for k in orphans:
+        try:
+            (deleter or delete_object)(object_url(k, PUBLIC), PUBLIC)
+        except Exception as exc:  # noqa: BLE001 — boto3 is prod-only, so its error types can't be named
+            log.warning("could not delete orphaned story upload %s (%s); left for the next sweep", k, type(exc).__name__)
+            continue
+        deleted += 1
+    if deleted:
+        emit("story_orphans_swept", count=deleted)
+    return deleted
