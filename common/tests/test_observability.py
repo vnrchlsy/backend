@@ -183,3 +183,121 @@ def test_a_logged_dict_is_scrubbed_like_everything_else():
     assert line["message"]["email"] == "[redacted]"
     assert line["message"]["lat"] == "[redacted]"
     assert line["message"]["species"] == "dog"
+
+
+# --- Request-latency log line (stories deploy checklist §4) -------------------------------
+#
+# One JSON line per request on the `kupkop.request` logger, so a pipeline can compute a p95
+# per route. What it must NOT carry matters more than what it does: no account id, no query
+# string, no body, and no raw path (a path holds object ids and, on a 404, whatever a
+# stranger typed).
+
+def _request_lines(caplog):
+    return [r for r in caplog.records if r.name == "kupkop.request"]
+
+
+def _fields(record):
+    """What the JSON formatter would ship: the record rendered and scrubbed, then parsed."""
+    return json.loads(JsonFormatter().format(record))["message"]
+
+
+def test_a_request_writes_one_latency_line(client, caplog):
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    res = client.get("/api/v1/health", HTTP_X_REQUEST_ID="lat-1")
+
+    lines = _request_lines(caplog)
+    assert len(lines) == 1
+    fields = _fields(lines[0])
+    assert fields["method"] == "GET"
+    assert fields["route"] == "api/v1/health"
+    assert fields["status"] == res.status_code == 200
+    assert fields["request_id"] == "lat-1"
+    assert isinstance(fields["duration_ms"], (int, float)) and fields["duration_ms"] >= 0
+
+
+def test_the_line_is_exactly_these_fields_and_nothing_else(client, caplog):
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    client.get("/api/v1/health")
+    assert set(_fields(_request_lines(caplog)[0])) == {
+        "event", "method", "route", "status", "duration_ms", "request_id"}
+
+
+@pytest.mark.django_db
+def test_the_route_is_the_template_not_the_path(client, caplog):
+    """A path with an id in it would make every story its own series, and would put an
+    identifier in a log that is meant to be account-free."""
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    story = "0b6f2c1e-8d4a-4b7e-9a3c-5f1e2d3c4b5a"
+    res = client.get(f"/api/v1/stories/{story}")
+
+    fields = _fields(_request_lines(caplog)[0])
+    assert fields["route"] == "api/v1/stories/<uuid:story_id>"
+    assert fields["status"] == res.status_code
+    assert story not in json.dumps(fields)
+
+
+def test_the_query_string_is_never_logged(client, caplog):
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    client.get("/api/v1/health?city=Cebu&token=hunter2&email=ana@example.ph")
+    raw = JsonFormatter().format(_request_lines(caplog)[0])
+    for leaked in ("Cebu", "hunter2", "ana@example.ph", "city="):
+        assert leaked not in raw
+
+
+@pytest.mark.django_db
+def test_no_account_id_and_no_body_are_logged(client, caplog):
+    from accounts.factories import AccountFactory
+    from accounts.tokens import tokens_for
+
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    account = AccountFactory()
+    client.delete("/api/v1/me", {"password": "s3cret-body-value"},
+                  content_type="application/json",
+                  HTTP_AUTHORIZATION=f"Bearer {tokens_for(account)['access']}")
+
+    raw = JsonFormatter().format(_request_lines(caplog)[0])
+    assert str(account.pk) not in raw
+    assert "s3cret-body-value" not in raw
+
+
+def test_an_unmatched_path_is_logged_under_one_fixed_label(client, caplog):
+    """A 404's path is whatever a stranger typed; it must not become a log value."""
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    res = client.get("/no/such/place/ana@example.ph")
+
+    fields = _fields(_request_lines(caplog)[0])
+    assert res.status_code == 404 and fields["status"] == 404
+    assert fields["route"] == "unmatched"
+    assert "place" not in json.dumps(fields)
+
+
+def test_a_view_that_raises_is_still_logged_as_a_500(rf, caplog):
+    from common.observability import RequestIdMiddleware
+
+    def boom(_request):
+        raise RuntimeError("view blew up")
+
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    with pytest.raises(RuntimeError):
+        RequestIdMiddleware(boom)(rf.get("/api/v1/health"))
+
+    fields = _fields(_request_lines(caplog)[0])
+    assert fields["status"] == 500
+    assert fields["route"] == "unmatched"          # no resolver_match on a bare request
+
+
+def test_duration_is_measured_in_milliseconds(rf, caplog, monkeypatch):
+    from django.http import HttpResponse
+
+    from common import observability
+
+    ticks = iter([100.0, 100.25])                  # a quarter of a second apart
+    monkeypatch.setattr(observability.time, "perf_counter", lambda: next(ticks))
+    caplog.set_level(logging.INFO, logger="kupkop.request")
+    observability.RequestIdMiddleware(lambda r: HttpResponse("ok"))(rf.get("/x"))
+
+    assert _fields(_request_lines(caplog)[0])["duration_ms"] == 250.0
+
+
+def test_the_latency_logger_is_configured_at_info(settings):
+    assert settings.LOGGING["loggers"]["kupkop.request"]["level"] == "INFO"

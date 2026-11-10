@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from contextvars import ContextVar
 
@@ -32,6 +33,14 @@ from django.conf import settings
 # and it defaults to "-" so a sweep or management command still formats cleanly — those are
 # exactly the runs nobody is watching when they break.
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+
+# One line per request, for latency monitoring (stories deploy checklist §4). Its own logger
+# so a pipeline can filter on `logger == "kupkop.request"`.
+request_log = logging.getLogger("kupkop.request")
+
+# What a request that matched no route is logged as. The raw path of a 404 is whatever a
+# stranger typed, so it is never a log value.
+UNMATCHED_ROUTE = "unmatched"
 
 REDACTED = "[redacted]"
 
@@ -154,12 +163,38 @@ class RequestIdMiddleware:
         incoming = request.META.get(self.HEADER, "").strip()
         request_id = incoming or uuid.uuid4().hex[:16]
         token = request_id_var.set(request_id)
+        started = time.perf_counter()
+        status = 500                    # what a view that raises past Django's handler becomes
         try:
             response = self.get_response(request)
+            status = response.status_code
             response["X-Request-ID"] = request_id
             return response
         finally:
+            self._log(request, status, started, request_id)
             request_id_var.reset(token)
+
+    @staticmethod
+    def _log(request, status, started, request_id):
+        """One JSON line: method, route TEMPLATE, status, duration, request id. Nothing else.
+
+        ⚠️ The field list is closed on purpose. No account id, no query string, no body, no
+        raw path: the template (`stories/<uuid:story_id>`) keeps a series per route instead
+        of per object, and keeps identifiers out of a log that is meant to be account-free.
+        Never raises: a logging fault must not turn a served response into an error.
+        """
+        try:
+            match = getattr(request, "resolver_match", None)
+            request_log.info({
+                "event": "request",
+                "method": request.method,
+                "route": (match.route if match and match.route else UNMATCHED_ROUTE),
+                "status": status,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                "request_id": request_id,
+            })
+        except Exception:
+            pass
 
     def process_template_response(self, request, response):
         """Stamp the id into the error body itself, before DRF renders it.
