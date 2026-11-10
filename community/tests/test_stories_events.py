@@ -78,6 +78,16 @@ def test_a_linked_story_from_the_adoption_prompt_says_so(client, logged):
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("source", ["feed", "adoption_cta", "poster_prompt", "rescue_prompt"])
+def test_every_entry_point_the_app_has_is_a_known_source(client, logged, source):
+    """Stories review step 11 · the poster's and the rescuer's prompts are entry points too; this list must grow with the app's (see STORY_SOURCES)."""
+    me = AccountFactory()
+    _post(client, me, source=source)
+    (e,) = _events(logged, "story_posted")
+    assert e["source"] == source
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("sent", [None, "", "  ", "nonsense", "FEED", "a" * 200, "x; drop table"])
 def test_a_source_that_is_missing_or_not_one_we_know_is_unknown_and_never_an_error(client, logged, sent):
     me = AccountFactory()
