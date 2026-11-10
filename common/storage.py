@@ -67,6 +67,28 @@ def delete_object(file_url, visibility=RESTRICTED):
     boto3.client("s3").delete_object(Bucket=bucket, Key=object_key(file_url, visibility))
 
 
+def object_url(key, visibility=RESTRICTED):
+    """The stored reference for a bucket `key`, in the form `create_presigned_upload` hands out (`https://{bucket}/{key}`; the dev placeholder with no bucket)."""
+    bucket = _bucket_name(visibility)
+    return f"https://{bucket}/{key}" if bucket else f"https://example.invalid/{key}"
+
+
+def list_objects(visibility, prefix):
+    """Every object under `prefix` as `(key, last_modified)`, last_modified timezone-aware. For sweeps that look for files nothing cites.
+
+    Dev stub: no bucket configured means nothing was ever uploaded, so it yields nothing (the same seam as `delete_object`)."""
+    bucket = _bucket_name(visibility)
+    if not bucket:
+        return iter(())
+    import boto3  # prod-only; not a dev dependency
+
+    def pages():
+        for page in boto3.client("s3").get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                yield obj["Key"], obj["LastModified"]
+    return pages()
+
+
 def delete_object_or_log(file_url, visibility, *, why, deleter=None):
     """Delete a superseded object, and on a storage error log its KEY and carry on (F3, shelter home test plan).
 
