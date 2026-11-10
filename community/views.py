@@ -481,26 +481,34 @@ class StoryDetailView(APIView):
 
 
 class StoryReactionView(APIView):
-    """US-T1 · react / un-react. Idempotent via uq_story_reaction: POST twice is still one row."""
+    """US-T1 · react / un-react. Idempotent via uq_story_reaction: POST twice is still one row.
+
+    Stories review step 9 (ST9, ST10) · both answer `{reaction_count, my_reaction}`, so the app takes the state from the server instead of guessing
+    it from what it just sent; and un-reacting obeys the same visibility as reacting: a story the viewer may not see (hidden, deleted by its author, by
+    a suspended or deleted author, or across a block) is a 404 for both, so the count of a story nobody may see is never readable, and a 200 against a
+    404 never confirms that it exists. A reaction already on such a story is left alone (it is back if the story is restored)."""
     permission_classes = [IsAuthenticated]
 
-    def _count(self, story):
-        return StoryReaction.objects.filter(story=story).count()
+    def _story(self, request, story_id):
+        return (StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED)
+                .filter(public_account_q("author_account__"))
+                .exclude(author_account_id__in=hidden_from(request.user)).first())
+
+    def _answer(self, story, mine):
+        return Response({"reaction_count": StoryReaction.objects.filter(story=story).count(), "my_reaction": mine})
 
     def post(self, request, story_id):
-        story = (StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED)
-                 .filter(public_account_q("author_account__"))
-                 .exclude(author_account_id__in=hidden_from(request.user)).first())
+        story = self._story(request, story_id)
         if story is None:
             return _err("not_found", "No such story.", 404)
         _, created = StoryReaction.objects.get_or_create(story=story, account=request.user)
         if created:
             emit("story_reacted", story_type=story.story_type)
-        return Response({"reaction_count": self._count(story)})
+        return self._answer(story, True)
 
     def delete(self, request, story_id):
-        story = StoryPost.objects.filter(pk=story_id).first()
+        story = self._story(request, story_id)
         if story is None:
             return _err("not_found", "No such story.", 404)
         StoryReaction.objects.filter(story=story, account=request.user).delete()
-        return Response({"reaction_count": self._count(story)})
+        return self._answer(story, False)
