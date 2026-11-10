@@ -38,7 +38,7 @@ from .models import StoryPhoto, StoryPost, StoryStatus, StoryType
 
 # Stories review step 10 (ST18) · where a post came from. A closed list, so free text never reaches the log; anything else is "unknown".
 # Add a value here in the same change that adds the entry point that sends it.
-STORY_SOURCES = frozenset({"feed", "adoption_cta"})
+STORY_SOURCES = frozenset({"feed", "adoption_cta", "poster_prompt", "rescue_prompt"})
 
 
 def clean_source(value):
