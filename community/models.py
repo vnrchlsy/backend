@@ -225,6 +225,10 @@ class StoryPost(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     # Set when the author deletes it. `community.stories.purge_removed_stories` removes the row and its files REMOVED_RETENTION_DAYS later.
     removed_at = models.DateTimeField(null=True, blank=True)
+    # Stories review step 14 (ST21) · the moderation history on the story itself: when a takedown last hid it, and when staff last restored it.
+    # An author's own delete is `removed_at`, never these. The flags stay the audit trail; these answer "when" without a join.
+    hidden_at = models.DateTimeField(null=True, blank=True)
+    restored_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "story_post"
