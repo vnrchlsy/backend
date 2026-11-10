@@ -36,6 +36,29 @@ from common.uploads import own_upload_url_error
 
 from .models import StoryPhoto, StoryPost, StoryStatus, StoryType
 
+# Stories review step 10 (ST18) · where a post came from. A closed list, so free text never reaches the log; anything else is "unknown".
+# Add a value here in the same change that adds the entry point that sends it.
+STORY_SOURCES = frozenset({"feed", "adoption_cta"})
+
+
+def clean_source(value):
+    return value if isinstance(value, str) and value in STORY_SOURCES else "unknown"
+
+
+# The fields a refusal may name. Anything else is just "invalid": a field name the client chose must not become a log dimension.
+_REFUSAL_FIELDS = frozenset({"caption", "photos", "story_type", "adoption_listing_id", "rescue_case_id", "source"})
+
+
+def refusal_reason(errors):
+    """A coarse reason for a refused post, from a serializer's `errors`: invalid_<field>, or invalid."""
+    field = next(iter(errors), None) if isinstance(errors, dict) else None
+    return f"invalid_{field}" if field in _REFUSAL_FIELDS else "invalid"
+
+
+def emit_refused(reason):
+    emit("story_post_refused", reason=reason)
+
+
 MAX_CAPTION = 2000    # SQ4 (owner, 2026-11-09)
 MAX_PHOTOS = 6        # the app's compose screen takes up to this many (stories review step 8)
 
@@ -86,7 +109,7 @@ def _resolve_link(author, story_type, adoption_listing_id, rescue_case_id):
     return {}, StoryType.GENERAL
 
 
-def create_story(author, *, photos, caption="", story_type=None, adoption_listing_id=None, rescue_case_id=None):
+def create_story(author, *, photos, caption="", story_type=None, adoption_listing_id=None, rescue_case_id=None, source=None):
     """Write one story and its photos. Raises `StoryError` for a link that is unknown, not the author's, not yet
     eligible, or already has the author's story."""
     link, derived_type = _resolve_link(author, story_type, adoption_listing_id, rescue_case_id)
@@ -103,7 +126,9 @@ def create_story(author, *, photos, caption="", story_type=None, adoption_listin
         if link and StoryPost.objects.filter(author_account=author, **link).exists():
             raise _EXISTS from None           # a racing post on the same link won (uq_story_author_*)
         raise
-    transaction.on_commit(lambda: emit("story_posted", story_type=derived_type))
+    # Step 10 · account-free: the type, where it came from, whether it is about an adoption or rescue, and how many photos. After the commit.
+    props = dict(story_type=derived_type, source=clean_source(source), linked=bool(link), photo_count=len(photos))
+    transaction.on_commit(lambda: emit("story_posted", **props))
     return story
 
 
@@ -216,8 +241,10 @@ def remove_story(story_id, author):
     """Delete the author's story: gone from every surface at once, kept for `REMOVED_RETENTION_DAYS`. A story moderation hid may be
     deleted too (the author's own choice, and the row stays as evidence all the same); it can then no longer be restored."""
     story = _own_story_for_update(story_id, author)
+    was_hidden = story.status == StoryStatus.HIDDEN
     story.status, story.removed_at = StoryStatus.REMOVED, timezone.now()
     story.save(update_fields=["status", "removed_at"])
+    transaction.on_commit(lambda: emit("story_deleted", story_type=story.story_type, was_hidden=was_hidden))
     return story
 
 
@@ -230,6 +257,7 @@ def edit_caption(story_id, author, caption):
         raise StoryError("story_hidden", "Moderators hid this story, so it can't be edited. You can ask for a second look from Support.", 409)
     story.caption = caption
     story.save(update_fields=["caption"])
+    transaction.on_commit(lambda: emit("story_edited", story_type=story.story_type))
     return story
 
 
@@ -249,4 +277,6 @@ def purge_removed_stories(now=None):
             if not StoryPhoto.objects.filter(url=url).exists():
                 delete_object_or_log(url, PUBLIC, why="a deleted story's photo", deleter=delete_object)
         purged += 1
+    if purged:
+        emit("story_purged", count=purged)
     return purged

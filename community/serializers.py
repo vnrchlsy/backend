@@ -90,6 +90,8 @@ class StoryCreateSerializer(serializers.Serializer):
                                   error_messages={"max_length": f"A story can have up to {MAX_PHOTOS} photos."})
     adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)
     rescue_case_id = serializers.UUIDField(required=False, allow_null=True)
+    # Step 10 · which entry point opened compose (a closed list in community/stories.py; anything else is "unknown", never an error).
+    source = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate_photos(self, photos):
         photos = _own_story_photos(photos, self.context["request"].user)
