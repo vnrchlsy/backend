@@ -6,7 +6,8 @@ from accounts.models import Account
 
 
 class DeviceToken(models.Model):
-    """US-P1 · a device's FCM token. Matches §7's device_token (fcm_token UNIQUE, the
+    """US-P1 · a device's push token (today an Expo push token, `ExponentPushToken[...]`; the column keeps its
+    §7 name `fcm_token`). Matches §7's device_token (fcm_token UNIQUE, the
     device_platform enum modelled as choices). Re-registering a token re-homes it to the
     latest account — a shared phone must not keep pushing to its previous owner."""
     token_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

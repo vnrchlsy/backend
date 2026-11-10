@@ -70,3 +70,20 @@ def test_the_in_app_row_keeps_its_original_typed_data(django_capture_on_commit_c
     with django_capture_on_commit_callbacks(execute=True):
         notify(a, "inquiry_received", title="x", body="y", data={"inquiry_id": "i", "poster_is_shelter": True})
     assert Notification.objects.get(account=a).data == {"inquiry_id": "i", "poster_is_shelter": True}
+
+
+@pytest.mark.django_db
+def test_end_to_end_through_the_expo_seam(settings, django_capture_on_commit_callbacks):
+    """notify() → fan-out → the real send_push, with only the HTTP hop patched: a good token is sent
+    to, a token Expo could never deliver to (a legacy non-Expo string) is pruned, a good one is kept."""
+    settings.EXPO_PUSH_ENABLED = "1"
+    a = AccountFactory()
+    DeviceToken.objects.create(account=a, fcm_token="ExponentPushToken[good]", platform="ios")
+    DeviceToken.objects.create(account=a, fcm_token="legacy-fcm-string", platform="android")
+    with patch.object(pushmod, "_expo_transport", return_value=(200, {"data": [{"status": "ok"}]})) as tx:
+        with django_capture_on_commit_callbacks(execute=True):
+            notify(a, "shift_confirmed", title="x", body="y", data={"shift_id": "s", "signup_id": "g"})
+    sent = [m for call in tx.call_args_list for m in call[0][0]]
+    assert [m["to"] for m in sent] == ["ExponentPushToken[good]"]
+    assert sent[0]["data"] == {"type": "shift_confirmed", "shift_id": "s", "signup_id": "g"}
+    assert list(DeviceToken.objects.filter(account=a).values_list("fcm_token", flat=True)) == ["ExponentPushToken[good]"]

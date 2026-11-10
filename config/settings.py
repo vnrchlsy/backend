@@ -351,11 +351,12 @@ DOCUMENT_RETENTION_DAYS = 90
 # why it must match what the privacy policy states. The screen says "30 days".
 ACCOUNT_PURGE_GRACE_DAYS = 30
 
-# US-P2 · FCM push send seam — unset by default (no-op sender, nothing sent). Set both
-# to enable the live FCM HTTP v1 transport in notifications/push.py. Never commit a
-# real credentials path/secret here — supply via environment at deploy time.
-FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
-FCM_CREDENTIALS_PATH = os.environ.get("FCM_CREDENTIALS_PATH", "")
+# US-P2 · push send seam, on the Expo push service (notifications review NQ1) — unset by default
+# (no-op sender, nothing sent). Set EXPO_PUSH_ENABLED to any non-empty value to send for real;
+# EXPO_PUSH_ACCESS_TOKEN is only needed if enhanced push security is on in the Expo project.
+# Never commit a real token here — supply it via the environment at deploy time.
+EXPO_PUSH_ENABLED = os.environ.get("EXPO_PUSH_ENABLED", "")
+EXPO_PUSH_ACCESS_TOKEN = os.environ.get("EXPO_PUSH_ACCESS_TOKEN", "")
 
 # US-D2 · S3 media storage seam — two buckets by visibility (see common/storage.py).
 # Unset by default (dev stub; no real object is stored or signed). Set both to activate

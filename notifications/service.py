@@ -23,7 +23,7 @@ class UnregisteredNotificationType(Exception):
 
 def _push_data(type, data):
     """What goes on the wire: the type the app routes on, then the deep-link payload, every value a string.
-    FCM's `data` map takes strings only (a bool or an id would be rejected), and the app reads
+    Push `data` values are strings only (a bool or an id would be rejected), and the app reads
     `poster_is_shelter` as "true" / "false" from a push. The in-app row keeps the original typed data."""
     def text(v):
         return ("true" if v else "false") if isinstance(v, bool) else str(v)
@@ -61,9 +61,9 @@ def notify(account, type, *, title="", body="", data=None):
         raise UnregisteredNotificationType(type)
     row = Notification.objects.create(
         account=account, type=type, title=title, body=body, data=data)
-    # TODO(FCM-enable): the push fan-out runs inline in the triggering request's commit path.
-    # That is fine while send_push is a creds-guarded no-op, but once real FCM is configured it
-    # adds per-device network latency to the request that called notify(). Move _fan_out_push
-    # onto a task queue at FCM-enable time (US-D1). Recorded in the Sprint 5 review.
+    # TODO(push-outbox): the push fan-out runs inline in the triggering request's commit path.
+    # Each send is bounded (push.EXPO_TIMEOUT_SECONDS) but still adds network latency to the request
+    # that called notify(). Notifications review step 6 moves it onto a push_outbox drained by a
+    # worker; do that before real push is switched on (EXPO_PUSH_ENABLED).
     transaction.on_commit(lambda: _fan_out_push(account, type, title, body, data))
     return row

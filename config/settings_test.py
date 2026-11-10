@@ -25,6 +25,6 @@ SENTRY_DSN = ""
 # Media. Blank buckets → common/storage.py's local stub.
 MEDIA_S3_BUCKET_PUBLIC = ""
 MEDIA_S3_BUCKET_RESTRICTED = ""
-# Push. Blank project → notifications/push.py's no-op transport.
-FCM_PROJECT_ID = ""
-FCM_CREDENTIALS_PATH = ""
+# Push. Blank → notifications/push.py's no-op sender.
+EXPO_PUSH_ENABLED = ""
+EXPO_PUSH_ACCESS_TOKEN = ""

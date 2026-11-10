@@ -1,7 +1,7 @@
 """The suite never reaches a provider, whatever the developer's .env says.
 
 WHY THIS EXISTS. `config/settings.py` loads `.env`, and every outbound seam — mail, Sentry,
-S3, FCM — is env-sourced and credential-guarded: set the variable, the real backend runs.
+S3, push — is env-sourced and credential-guarded: set the variable, the real backend runs.
 That is the right posture for a checkout. It is the wrong one for the test run: with
 `EMAIL_PROVIDER=resend` and a key in `.env`, every signup and resend test posted to
 api.resend.com (~200ms each, a 422 back), which made `test_otp_resend_throttle_is_identical
@@ -26,7 +26,7 @@ OUTBOUND_SEAMS = [
     "EMAIL_PROVIDER", "RESEND_API_KEY", "AWS_SES_REGION",
     "SENTRY_DSN",
     "MEDIA_S3_BUCKET_PUBLIC", "MEDIA_S3_BUCKET_RESTRICTED",
-    "FCM_PROJECT_ID", "FCM_CREDENTIALS_PATH",
+    "EXPO_PUSH_ENABLED", "EXPO_PUSH_ACCESS_TOKEN",
 ]
 
 
