@@ -113,7 +113,7 @@ def _hide_story(story, reviewer, reason=""):
     # author sees a "hidden by moderation" state rather than a vanished post. The flag stays as the audit trail.
     # A story its author deleted is not hidden into view again: `removed` stays `removed` (stories review step 6, SQ1).
     changed = bool(StoryPost.objects.filter(pk=story.pk).exclude(status__in=(StoryStatus.HIDDEN, StoryStatus.REMOVED))
-                   .update(status=StoryStatus.HIDDEN))
+                   .update(status=StoryStatus.HIDDEN, hidden_at=timezone.now()))
     if changed:
         # Review step 9 (MO7) · the author is told, why, and how to ask for a second look. A takedown used to be a silent vanish.
         notify(story.author_account, "story_removed", title="Your story was hidden",

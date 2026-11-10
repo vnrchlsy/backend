@@ -15,6 +15,7 @@ from accounts.models import Account
 from accounts.terms import TermsAccepted
 from accounts.visibility import account_is_public, public_account_q
 from common.analytics import emit
+from common.cities import city_variants
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from moderation.blocks import hidden_from
 from notifications.service import notify
@@ -415,10 +416,14 @@ class StoriesView(APIView):
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
               .annotate(_rcount=Count("reactions")))
-        city = request.query_params.get("city")
-        if city:
-            qs = qs.filter(author_account__addresses__is_primary=True,
-                           author_account__addresses__city=city).distinct()
+        # Stories review step 15 (ST20) · case-insensitive, and "Marikina" finds "Marikina City" and back (common.cities). No distinct: the join is
+        # to the PRIMARY address and `uq_address_one_primary` allows one per account, so a story cannot appear twice.
+        variants = city_variants(request.query_params.get("city"))
+        if variants:
+            city_q = Q()
+            for v in variants:
+                city_q |= Q(author_account__addresses__city__iexact=v)
+            qs = qs.filter(city_q, author_account__addresses__is_primary=True)
         return _page_response(request, qs)
 
     def post(self, request):
