@@ -6,6 +6,7 @@ Every change to a need or a pledge — status, `quantity_received`, `decided_at`
 row lock (D-S6-7). The views validate, call one writer, and notify AFTER it has committed.
 """
 from django.db.models import Count, Q
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -62,7 +63,16 @@ from .serializers import (
     StoryPatchSerializer,
     StorySerializer,
 )
-from .stories import StoryError, create_story, edit_caption, feed_page, remove_story, story_links
+from .stories import (
+    StoryError,
+    create_story,
+    edit_caption,
+    emit_refused,
+    feed_page,
+    refusal_reason,
+    remove_story,
+    story_links,
+)
 
 
 def _err(code, message, status):
@@ -413,17 +423,21 @@ class StoriesView(APIView):
 
     def post(self, request):
         s = StoryCreateSerializer(data=request.data, context={"request": request})
-        s.is_valid(raise_exception=True)
+        if not s.is_valid():
+            emit_refused(refusal_reason(s.errors))          # step 10 · why posts fail, coarsely and account-free
+            raise ValidationError(s.errors)                 # exactly what is_valid(raise_exception=True) raises
         d = s.validated_data
         if not d["photos"]:
+            emit_refused("photo_required")
             return _err("photo_required", "A story needs at least one photo.", 422)
         # Stories review steps 1 and 3 · one writer: atomic, the link checked and earned, the type derived from it.
         try:
             story = create_story(request.user, photos=d["photos"], caption=d["caption"],
                                  story_type=d.get("story_type"),
                                  adoption_listing_id=d.get("adoption_listing_id"),
-                                 rescue_case_id=d.get("rescue_case_id"))
+                                 rescue_case_id=d.get("rescue_case_id"), source=d.get("source"))
         except StoryError as e:
+            emit_refused(e.code)
             return _err(e.code, e.message, e.status)
         return Response({"story_id": str(story.pk)}, status=201)
 
@@ -454,6 +468,8 @@ class StoryDetailView(APIView):
         if request.user and request.user.is_authenticated:
             if StoryReaction.objects.filter(account=request.user, story=story).exists():
                 mine = {story.pk}
+        if not is_author:                                                  # step 10 · reach: someone other than the author opened it
+            emit("story_viewed", story_type=story.story_type, viewer="member" if request.user.is_authenticated else "guest")
         # `mine` (moderation walk W1) is in the row: the author is told it is theirs, so the app does not offer them "Report this person" and "Block".
         return Response(StorySerializer(_story_row(story, mine, story_links([story], request.user), request.user)).data)
 
@@ -510,5 +526,7 @@ class StoryReactionView(APIView):
         story = self._story(request, story_id)
         if story is None:
             return _err("not_found", "No such story.", 404)
-        StoryReaction.objects.filter(story=story, account=request.user).delete()
+        removed, _ = StoryReaction.objects.filter(story=story, account=request.user).delete()
+        if removed:
+            emit("story_unreacted", story_type=story.story_type)        # step 10 · only when a reaction was really removed: net reactions are derivable
         return self._answer(story, False)
