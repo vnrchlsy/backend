@@ -1,5 +1,6 @@
+from django.core.exceptions import RequestDataTooBig
 from django.http import JsonResponse
-from django.views.defaults import page_not_found, server_error
+from django.views.defaults import bad_request, page_not_found, server_error
 from rest_framework.exceptions import Throttled
 from rest_framework.views import exception_handler
 
@@ -92,3 +93,16 @@ def api_server_error(request):
         return JsonResponse({"error": {"code": "server_error", "message": "Something went wrong on our side.",
                                        "request_id": request_id_var.get()}}, status=500)
     return server_error(request)
+
+
+def api_bad_request(request, exception=None):
+    """Stories test plan NT-14 · a request refused BEFORE DRF runs (a body past DATA_UPLOAD_MAX_MEMORY_SIZE, a malformed multipart body, a bad Host) raises
+    `SuspiciousOperation` and used to answer API clients with Django's HTML "Bad Request" page: the one refusal outside the envelope, and the one a hostile
+    client is the one to send. API paths answer in the envelope (status unchanged, 400) with a code the app can read; everything else keeps Django's page.
+    The message never names the setting."""
+    if request.path.startswith("/api/"):
+        too_big = isinstance(exception, RequestDataTooBig)
+        return JsonResponse({"error": {"code": "request_too_large" if too_big else "bad_request",
+                                       "message": "That request was too large." if too_big else "That request could not be read.",
+                                       "request_id": request_id_var.get()}}, status=400)
+    return bad_request(request, exception)

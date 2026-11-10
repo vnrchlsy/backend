@@ -58,7 +58,7 @@ from django.utils import timezone  # noqa: E402
 
 from accounts.models import Account, AccountStatus  # noqa: E402
 from accounts.tokens import tokens_for  # noqa: E402
-from community.models import StoryPost  # noqa: E402
+from community.models import StoryPhoto, StoryPost, StoryReaction  # noqa: E402
 from listings.models import AdoptionInquiry, AdoptionListing, InquiryStatus  # noqa: E402
 from sagip.geo import CITY_CENTROIDS  # noqa: E402
 from sagip.models import ReportType, StrayReport, StrayStatus  # noqa: E402
@@ -185,12 +185,27 @@ def seed(scale: str) -> dict:
 
     _seed_inbox(rng, now, cfg, [a for a in accounts if a.account_type == "personal"])
 
-    StoryPost.objects.bulk_create([
+    # Stories review test plan F7 · a feed of stories WITHOUT photos or reactions measures a query the app never runs: every card prefetches its photos and
+    # counts its reactions. So each story gets two photos and a few reactions, and one is VIRAL (most of the accounts reacted), the shape F7 names.
+    stories = [
         StoryPost(story_id=uuid.uuid4(), author_account=rng.choice(accounts),
                   story_type="general", caption=f"Seeded story {i}. " * 8,
                   status="published",
                   created_at=now - timedelta(hours=rng.randint(0, 720)))
-        for i in range(cfg["stories"])], batch_size=2000)
+        for i in range(cfg["stories"])]
+    StoryPost.objects.bulk_create(stories, batch_size=2000)
+    StoryPhoto.objects.bulk_create([
+        StoryPhoto(story=st, url=f"https://load.example/story_photo/{st.author_account_id}/{st.story_id}-{n}.jpg", is_primary=(n == 0), position=n)
+        for st in stories for n in range(2)], batch_size=2000)
+    reactions = []
+    for st in stories:
+        for acc in rng.sample(accounts, k=rng.randint(0, 8)):
+            reactions.append(StoryReaction(story=st, account=acc))
+    viral = stories[0]
+    reactions = [r for r in reactions if r.story_id != viral.story_id]
+    reactions += [StoryReaction(story=viral, account=acc) for acc in accounts[:max(500, len(accounts) // 2)]]
+    StoryReaction.objects.bulk_create(reactions, batch_size=5000)
+    print(f"  story reactions     {len(reactions):>7,}  (one story holds {max(500, len(accounts) // 2):,})")
     print(f"  story posts         {cfg['stories']:>7,}")
 
     with connection.cursor() as cur:
@@ -270,6 +285,24 @@ def timed(fn, n, warmup=5):
     return samples, statuses
 
 
+def story_scenarios(client, get, writers):
+    """Stories test plan F7 · the feed's second page by cursor, the story with the most reactions opened, and one author's own list."""
+    from django.db.models import Count
+    first = client.get("/api/v1/stories").json()    # `client` is the one measure() built, which carries the TLS header
+    cursor = first.get("next")
+    viral = StoryPost.objects.annotate(n=Count("reactions")).order_by("-n").first()
+    author = viral.author_account if viral else (writers[0] if writers else None)
+    out = []
+    if cursor:
+        out.append(Scenario("GET /stories?cursor= (page 2)", "read", get("/api/v1/stories", {"cursor": cursor})))
+    if viral:
+        out.append(Scenario("GET /stories/{id} (most reacted)", "read", get(f"/api/v1/stories/{viral.story_id}")))
+    if author:
+        out.append(Scenario("GET /me/stories (an author)", "read",
+                            get("/api/v1/me/stories", HTTP_AUTHORIZATION=f"Bearer {tokens_for(author)['access']}")))
+    return out
+
+
 def build_scenarios(client, writers, inbox_shelter=None):
     manila = {"city": "Manila", "radius_km": "10"}
 
@@ -285,7 +318,8 @@ def build_scenarios(client, writers, inbox_shelter=None):
     # gloriously fast write. A load check that measures its own rejections is worse than
     # no load check. Each request now comes from a different seeded account; the
     # `!! HTTP` marker below stays as the tripwire that caught it.
-    writers = iter(writers)
+    writers_list = list(writers)
+    writers = iter(writers_list)
 
     def post_report():
         actor = next(writers)
@@ -312,6 +346,7 @@ def build_scenarios(client, writers, inbox_shelter=None):
         Scenario("GET /listings?city=&species= (filtered)", "read",
                  get("/api/v1/listings", {"city": "Manila", "species": "dog"})),
         Scenario("GET /stories (feed)", "read", get("/api/v1/stories")),
+        *story_scenarios(client, get, writers_list),
         *([Scenario("GET /shelter/requests?status=open (inbox)", "read",
                     get("/api/v1/shelter/requests", {"status": "open"}, **inbox_auth)),
            Scenario("GET /shelter/requests?kind=adoption (history)", "read",
@@ -394,7 +429,9 @@ def measure(scale: str, only: str | None = None) -> int:
 
     # 60 distinct writers: 45 measured POSTs + warm-ups, each under its own 20/day budget.
     writers = list(Account.objects.filter(status=AccountStatus.ACTIVE)[:60])
-    client = Client()
+    # DEBUG is off on purpose (see the top), so SECURE_SSL_REDIRECT is on and a plain request is a 301 to https. The proxy header says it already arrived over TLS;
+    # without it every scenario measured a redirect (and the first request answered HTML).
+    client = Client(HTTP_X_FORWARDED_PROTO="https")
     # The sweep emits one analytics line per suggested match — thousands of them, which
     # buries the results table it is printed above. The events themselves are US-E2 working
     # correctly; they just are not this script's output.

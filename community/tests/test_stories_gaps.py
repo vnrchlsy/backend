@@ -80,9 +80,11 @@ def test_a_body_past_the_size_limit_is_refused_and_writes_nothing(client):
     res = client.post(URL, big, content_type="application/json", **_hdr(me))
     assert res.status_code == 400, res.status_code
     assert StoryPost.objects.count() == 0
-    # FOUND (test plan NT-14): Django refuses the body before DRF runs, so the answer is its HTML "Bad Request" page, not the JSON error envelope
-    # every other refusal uses. The app's client reads a non-JSON 400 as a failed call, so nothing breaks; it is recorded, not pinned.
-
+    # Test plan NT-14 (fixed): Django refuses the body before DRF runs, which used to answer its HTML "Bad Request" page, the one refusal outside the JSON
+    # envelope. API paths now answer in the envelope (`handler400`), with a code the app can read and the request id.
+    assert res["Content-Type"].startswith("application/json"), res.content[:80]
+    err = res.json()["error"]
+    assert err["code"] == "request_too_large" and err["request_id"] and "DATA_UPLOAD" not in err["message"]
 
 @pytest.mark.django_db
 def test_nested_junk_in_photos_is_a_400_and_writes_nothing(client):

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from rest_framework.exceptions import Throttled, ValidationError
 
@@ -91,3 +93,18 @@ def test_an_error_inside_a_nested_serializer_reads_as_a_sentence_not_a_python_di
     exc = ValidationError({"application": {"experience": ["Please reword it."]}})
     error = error_handler(exc, {"view": None, "request": None}).data["error"]
     assert error["message"] == "Please reword it." and error["field"] == "application"
+
+
+# ---- test plan NT-14 (stories): a 400 raised before DRF runs answers API clients in the envelope ---------------------------------
+def test_handler400_answers_api_paths_in_the_envelope_and_other_paths_with_django_page():
+    from django.core.exceptions import RequestDataTooBig, SuspiciousOperation
+    from django.test import RequestFactory
+
+    from common.errors import api_bad_request
+    api = api_bad_request(RequestFactory().post("/api/v1/stories"), RequestDataTooBig("x"))
+    assert api.status_code == 400 and api["Content-Type"].startswith("application/json")
+    assert json.loads(api.content)["error"]["code"] == "request_too_large"
+    other = api_bad_request(RequestFactory().post("/api/v1/stories"), SuspiciousOperation("bad multipart"))
+    assert json.loads(other.content)["error"]["code"] == "bad_request"
+    page = api_bad_request(RequestFactory().post("/admin-api/x"), SuspiciousOperation("x"))
+    assert page.status_code == 400 and not page["Content-Type"].startswith("application/json")

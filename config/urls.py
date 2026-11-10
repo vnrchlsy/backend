@@ -45,3 +45,5 @@ urlpatterns = [
 handler404 = "common.errors.api_not_found"
 # I3 · the same for an unhandled error: API paths answer a 500 in the envelope with the request id.
 handler500 = "common.errors.api_server_error"
+# Stories test plan NT-14 · and a request refused before DRF runs (an oversize body) answers a 400 in the envelope.
+handler400 = "common.errors.api_bad_request"
