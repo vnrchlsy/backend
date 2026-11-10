@@ -394,6 +394,8 @@ LOGGING = {
         # Routing does not need separate handlers: every line already carries its `logger`
         # name as a queryable field, which is what a pipeline filters on.
         "kupkop.analytics": {"level": "INFO"},
+        # One latency line per request (common/observability.py::RequestIdMiddleware).
+        "kupkop.request": {"level": "INFO"},
         "django.request": {"level": "WARNING"},
         # Django's SQL logger at DEBUG prints every query INCLUDING bound parameters, which
         # is exactly where the PII is. Never raise this in a deployed profile.
